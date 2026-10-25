@@ -63,24 +63,16 @@ def unavailable(window, name):
     messagebox.showinfo(name, 'Esta función requiere un módulo o servicio que todavía no está conectado en este prototipo.', parent=window)
 
 
-<<<<<<< HEAD
 def open_screen(window, filename, extra_args=None):
-=======
-def open_screen(window, filename):
->>>>>>> 02e774af72ed27f7cd0ca62f760dca5592d7d340
     target = Path(__file__).resolve().parent / filename
     if filename not in {'login.py', 'home.py', 'update.py'} or not target.is_file():
         messagebox.showerror('Navegación', 'No se encontró la pantalla solicitada.', parent=window)
         return
     try:
-<<<<<<< HEAD
         cmd = [sys.executable, str(target)]
         if extra_args:
             cmd.extend(extra_args)
         subprocess.Popen(cmd, cwd=str(target.parent))
-=======
-        subprocess.Popen([sys.executable, str(target)], cwd=str(target.parent))
->>>>>>> 02e774af72ed27f7cd0ca62f760dca5592d7d340
     except OSError as error:
         messagebox.showerror('Navegación', str(error), parent=window)
         return
@@ -161,7 +153,6 @@ class Shell(ctk.CTk):
         profile.grid(row=0, column=1, padx=(8, 28))
         for glyph, topic in [('?', 'Ayuda'), ('♢', 'Notificaciones')]:
             button(profile, glyph, lambda name=topic: unavailable(self, name), width=24, border_width=0, height=32).pack(side='left', padx=2)
-<<<<<<< HEAD
         # --- RECUPERAR USUARIO DE LOS ARGUMENTOS (sys.argv) ---
         import sys
         nombre_usuario = "Usuario Institucional"
@@ -183,10 +174,6 @@ class Shell(ctk.CTk):
         
         # Nombre del usuario autenticado + Rol o dependencia
         label(profile, f'{nombre_usuario}', 12, TEXT, True).pack(side='left')
-=======
-        label(profile, 'LM', 12, ACCENT, True, width=38, height=38, fg_color=PINK, corner_radius=19).pack(side='left', padx=(10, 12))
-        label(profile, 'Laura Méndez · Oficialía de Partes', 12, TEXT, True).pack(side='left')
->>>>>>> 02e774af72ed27f7cd0ca62f760dca5592d7d340
         label(profile, '⌄', 12, MUTED).pack(side='left', padx=(10, 0))
         self.body = ctk.CTkScrollableFrame(self.main, fg_color=BG, corner_radius=0,
             scrollbar_button_color=LINE, scrollbar_button_hover_color=MUTED)
