@@ -4,9 +4,9 @@ import msal
 import requests
 import webbrowser
 from docx import Document
-
+from decouple import config
 # Reemplaza estos valores con los que obtuviste al registrar tu app en Azure Portal
-CLIENT_ID = "bd73d18c-55de-4e8b-a449-68b450645330"          # Application (client) ID
+CLIENT_ID = config('MICROSOFT_AUTH_API')          # Application (client) ID
 TENANT_ID = "common"                     # O tu Tenant ID específico si es solo para tu organización
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPES = ["Files.ReadWrite", "User.Read"]
