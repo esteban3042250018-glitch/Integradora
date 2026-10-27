@@ -3,6 +3,7 @@
 from tkinter import messagebox
 import sys
 import os
+import json
 from pathlib import Path
 import webview
 import customtkinter as ctk
@@ -12,7 +13,7 @@ from ui_helpers import (
     Shell, ACCENT, BG, WHITE, LINE, MUTED, TEXT, SOFT, PINK,
     label, card, button, entry, font, open_screen,
 )
-from document_store import guardar_documento, obtener_documento, reservar_folio
+from model.document_store import guardar_documento, obtener_documento, reservar_folio
 
 
 AREAS_EMISORAS = [
@@ -151,20 +152,25 @@ class CrearDocumentoApp(Shell):
         self.asunto.focus_set()
 
     def abrir_editor_web(self):
-        """Abre la ventana flotante con el editor web tipo Word."""
+    
         api = ApiWeb(self)
-        ruta_html = Path(__file__).parent / 'editor.html'
-        
+        RAIZ = Path(__file__).resolve().parent.parent   # carpeta "codigo"
+        EDITOR = RAIZ / 'editor.html'
+
+        if not EDITOR.is_file():
+            messagebox.showerror('Editor', f'No existe el editor:\n{EDITOR}', parent=self)
+            return
+
         def on_loaded():
-            window.evaluate_js(f"setContent({repr(self.cuerpo_html)});")
+            window.evaluate_js(f"setContent({json.dumps(self.cuerpo_html)});")
 
         window = webview.create_window(
             'Editor de Oficio - Estilo Word',
-            str(ruta_html),
+            str(EDITOR),
             js_api=api,
             width=900,
             height=650,
-            resizable=True
+            resizable=True,
         )
         webview.start(on_loaded)
 
