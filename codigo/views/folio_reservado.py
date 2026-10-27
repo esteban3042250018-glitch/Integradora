@@ -4,13 +4,18 @@ from pathlib import Path
 import sys
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
+import sys
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent.parent  # carpeta "codigo"
+if str(RAIZ) not in sys.path:
+    sys.path.insert(0, str(RAIZ))
 from ui_helpers import (
     Shell, ACCENT, BG, WHITE, LINE, TEXT, MUTED, PINK, GREEN, SOFT,
     label, card, button, open_screen, font,
 )
-from document_store import obtener_documento, reservar_folio
+from model.document_store import obtener_documento, reservar_folio
 from controller.pdf_generator import generar_pdf_oficio
-
 
 class PantallaFolio(Shell):
     def __init__(self, folio):
