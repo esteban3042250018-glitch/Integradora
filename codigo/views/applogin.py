@@ -3,7 +3,13 @@ import re
 from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image
-from .ui_helpers import *
+import sys
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent.parent  # carpeta "codigo"
+if str(RAIZ) not in sys.path:
+    sys.path.insert(0, str(RAIZ))
+from ui_helpers import *
 import msal
 from model.microsoft_auth import iniciar_sesion_interactivo
 import requests
@@ -15,7 +21,6 @@ AUTHORITY = "https://login.microsoftonline.com/common"
 SCOPES = ["https://graph.microsoft.com/Mail.Read"]
 
 msal_app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
-
 
 class LoginApp(ctk.CTk):
     def __init__(self):
