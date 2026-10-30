@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import requests
 from decouple import config
 from model.microsoft_auth import obtener_token_silencioso
 from model.microsoft_mail import obtener_correos_graph
+from model.document_store import reservar_folio
 # Configuración de MSAL para Microsoft Entra ID
 CLIENT_ID = config('MICROSOFT_AUTH_API')
 AUTHORITY = "https://login.microsoftonline.com/common"
@@ -55,7 +57,8 @@ class AppGestiónInstitucional(Shell):
         label(heading, 'Correspondencia (Correos de Microsoft)', 28).pack(anchor='w')
         label(heading, 'Bandeja sincronizada con tu cuenta institucional de Microsoft 365', 13, MUTED).pack(anchor='w')
         
-        button(header, '✦  Registrar correspondencia', lambda: unavailable(self, 'Registrar correspondencia'), primary=True, width=226).pack(side='right', anchor='n', pady=8)
+        button(header, '▤  Crear documento', self.crear_documento, primary=True, width=190).pack(side='right', anchor='n', pady=8)
+        button(header, '✦  Registrar correspondencia', lambda: unavailable(self, 'Registrar correspondencia'), width=226).pack(side='right', anchor='n', padx=(0, 12), pady=8)
         
         metrics = ctk.CTkFrame(self.content, fg_color='transparent')
         metrics.pack(fill='x', pady=(0, 22))
@@ -134,6 +137,15 @@ class AppGestiónInstitucional(Shell):
             self.filter_rows()
         else:
             super().navigate(name)
+
+    def crear_documento(self):
+        """Reserva un folio nuevo y abre el flujo: folio reservado → crear documento → PDF."""
+        try:
+            folio = reservar_folio()
+        except (OSError, ValueError) as error:
+            messagebox.showerror('Crear documento', str(error), parent=self)
+            return
+        open_screen(self, 'folio_reservado.py', folio)
 
     def reset_filters(self):
         self.category = 'all'
@@ -218,4 +230,7 @@ class AppGestiónInstitucional(Shell):
 
 
 if __name__ == '__main__':
+    # El login pasa el nombre del usuario como argumento; las demás pantallas lo heredan por GI_USUARIO.
+    if len(sys.argv) > 1:
+        os.environ['GI_USUARIO'] = sys.argv[1]
     AppGestiónInstitucional().mainloop()

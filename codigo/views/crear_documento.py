@@ -3,6 +3,9 @@
 from tkinter import messagebox
 import sys
 import os
+import json
+import html
+import webbrowser
 from pathlib import Path
 import webview
 import customtkinter as ctk
@@ -12,7 +15,7 @@ from ui_helpers import (
     Shell, ACCENT, BG, WHITE, LINE, MUTED, TEXT, SOFT, PINK,
     label, card, button, entry, font, open_screen,
 )
-from document_store import guardar_documento, obtener_documento, reservar_folio
+from model.document_store import guardar_documento, obtener_documento, reservar_folio
 
 
 AREAS_EMISORAS = [
@@ -24,6 +27,9 @@ AREAS_EMISORAS = [
     'Unidad de Recursos Materiales',
     'Enlace de Vinculación',
 ]
+
+TEXTO_POR_DEFECTO = "<p>Escribe aquí el contenido principal de tu oficio...</p>"
+MARCA_POR_DEFECTO = "Escribe aquí el contenido principal"
 
 
 class ApiWeb:
@@ -41,8 +47,9 @@ class CrearDocumentoApp(Shell):
     def __init__(self, folio):
         super().__init__('Crear documento')
         self.folio = folio
-        self.cuerpo_html = "<p>Escribe aquí el contenido principal de tu oficio...</p>"
-        self.file_id = None  # Almacenará el ID de OneDrive para sincronizar después
+        self.cuerpo_html = TEXTO_POR_DEFECTO
+        self.file_id = None   # ID del archivo en OneDrive
+        self.web_url = None   # URL de Word Online para reabrir el mismo archivo
         self.title('Gestión Institucional - Crear documento')
 
         content = ctk.CTkFrame(self.body, fg_color='transparent')
@@ -60,10 +67,10 @@ class CrearDocumentoApp(Shell):
         formulario = card(content)
         formulario.pack(fill='x', pady=(0, 18))
 
-        intro = ctf = ctk.CTkFrame(formulario, fg_color='transparent')
-        ctf.pack(fill='x', padx=28, pady=(25, 12))
-        label(ctf, 'Información del documento', 19, TEXT, True).pack(anchor='w')
-        label(ctf, 'Captura los datos y elige el método de redacción para el oficio.', 12, MUTED).pack(anchor='w', pady=(4, 0))
+        intro = ctk.CTkFrame(formulario, fg_color='transparent')
+        intro.pack(fill='x', padx=28, pady=(25, 12))
+        label(intro, 'Información del documento', 19, TEXT, True).pack(anchor='w')
+        label(intro, 'Captura los datos y elige el método de redacción para el oficio.', 12, MUTED).pack(anchor='w', pady=(4, 0))
 
         separador = ctk.CTkFrame(formulario, height=1, corner_radius=0, fg_color=LINE)
         separador.pack(fill='x', padx=28, pady=(4, 18))
@@ -98,10 +105,10 @@ class CrearDocumentoApp(Shell):
         self.recepcion = entry(campos, 'Escribe los datos de recepción', height=44)
         self.recepcion.grid(row=3, column=1, sticky='ew', padx=(12, 0), pady=(0, 24))
 
-        # 4. Opción A: Editor Web Flotante
+        # 4. Opción A: Editor Web
         seccion_editor = ctk.CTkFrame(campos, fg_color=SOFT, corner_radius=10)
         seccion_editor.grid(row=4, column=0, columnspan=2, sticky='ew', pady=(10, 12))
-        
+
         lbl_info_ed = ctk.CTkFrame(seccion_editor, fg_color='transparent')
         lbl_info_ed.pack(side='left', padx=18, pady=14)
         label(lbl_info_ed, 'Procesador de Textos Local', 13, TEXT, True).pack(anchor='w')
@@ -111,10 +118,10 @@ class CrearDocumentoApp(Shell):
         button(seccion_editor, '📝 Abrir Editor Web', self.abrir_editor_web, primary=True,
                width=220, height=42).pack(side='right', padx=15, pady=14)
 
-        # 5. Opción B: Microsoft 365 (Word Online en Azure)
+        # 5. Opción B: Microsoft 365 (Word Online)
         seccion_m365 = ctk.CTkFrame(campos, fg_color=SOFT, corner_radius=10)
         seccion_m365.grid(row=5, column=0, columnspan=2, sticky='ew', pady=(0, 12))
-        
+
         lbl_info_m365 = ctk.CTkFrame(seccion_m365, fg_color='transparent')
         lbl_info_m365.pack(side='left', padx=18, pady=14)
         label(lbl_info_m365, 'Microsoft 365 (Word Online)', 13, TEXT, True).pack(anchor='w')
@@ -123,13 +130,13 @@ class CrearDocumentoApp(Shell):
         button(seccion_m365, '☁️ Abrir en Word', self.abrir_en_microsoft_word, primary=True,
                width=180, height=42).pack(side='right', padx=15, pady=14)
 
-        # 6. Botón de Sincronización desde la Nube (NUEVO)
+        # 6. Sincronización desde la nube
         seccion_sync = ctk.CTkFrame(campos, fg_color=SOFT, corner_radius=10)
         seccion_sync.grid(row=6, column=0, columnspan=2, sticky='ew', pady=(0, 24))
-        
+
         lbl_info_sync = ctk.CTkFrame(seccion_sync, fg_color='transparent')
         lbl_info_sync.pack(side='left', padx=18, pady=14)
-        label(lbl_info_sync, 'S sincronizar Nube', 13, TEXT, True).pack(anchor='w')
+        label(lbl_info_sync, 'Sincronizar con la nube', 13, TEXT, True).pack(anchor='w')
         self.lbl_estado_sync = label(lbl_info_sync, 'Descarga los cambios hechos en Word Online', 11, MUTED)
         self.lbl_estado_sync.pack(anchor='w')
 
@@ -150,60 +157,89 @@ class CrearDocumentoApp(Shell):
         self.estado.pack(anchor='w', padx=8)
         self.asunto.focus_set()
 
+    # ------------------------------------------------------------------
+    # Editor web local
+    # ------------------------------------------------------------------
     def abrir_editor_web(self):
-        """Abre la ventana flotante con el editor web tipo Word."""
         api = ApiWeb(self)
-        ruta_html = Path(__file__).parent / 'editor.html'
-        
+        RAIZ = Path(__file__).resolve().parent.parent   # carpeta "codigo"
+        EDITOR = RAIZ / 'editor.html'
+
+        if not EDITOR.is_file():
+            messagebox.showerror('Editor', f'No existe el editor:\n{EDITOR}', parent=self)
+            return
+
         def on_loaded():
-            window.evaluate_js(f"setContent({repr(self.cuerpo_html)});")
+            window.evaluate_js(f"setContent({json.dumps(self.cuerpo_html)});")
 
         window = webview.create_window(
             'Editor de Oficio - Estilo Word',
-            str(ruta_html),
+            str(EDITOR),
             js_api=api,
             width=900,
             height=650,
-            resizable=True
+            resizable=True,
         )
         webview.start(on_loaded)
 
+    # ------------------------------------------------------------------
+    # Microsoft 365 / Word Online
+    # ------------------------------------------------------------------
     def abrir_en_microsoft_word(self):
-        """Abre Microsoft Word Online a través de Microsoft Graph API."""
+        """Abre Word Online. Si ya existe el archivo de este folio, lo reabre en vez de crear otro."""
         asunto = self.asunto.get().strip()
         if not asunto:
             messagebox.showwarning("Aviso", "Primero ingresa el asunto del oficio.", parent=self)
             return
-            
+
         try:
-            # Crea el documento en la nube y abre Word Online en el navegador
-            file_id, web_url = crear_y_abrir_word_en_nube(self.folio, asunto)
-            self.file_id = file_id  # Guardamos el ID para sincronizar después
-            messagebox.showinfo("Microsoft 365", 
-                                "Se ha abierto Word Online en tu navegador.\n"
-                                "Edita tu documento y al terminar presiona el botón 'Sincronizar Cambios' en la app.", 
-                                parent=self)
+            if self.file_id and self.web_url:
+                webbrowser.open(self.web_url)
+                return
+
+            self.file_id, self.web_url = crear_y_abrir_word_en_nube(self.folio, asunto)
+            messagebox.showinfo(
+                "Microsoft 365",
+                "Se abrió Word Online en tu navegador.\n"
+                "Escribe el contenido, espera unos segundos a que Word lo guarde\n"
+                "y después presiona 'Sincronizar Cambios' en la app.",
+                parent=self)
         except Exception as e:
             messagebox.showerror("Error de conexión", str(e), parent=self)
 
     def sincronizar_desde_nube(self):
-        """Función que descarga el texto editado en Word Online y lo refleja en la app."""
+        """Descarga el texto editado en Word Online y lo guarda como cuerpo del oficio."""
         if not self.file_id:
-            messagebox.showwarning("Aviso", "Primero debes abrir el documento en Word Online desde la aplicación.", parent=self)
+            messagebox.showwarning(
+                "Aviso", "Primero debes abrir el documento en Word Online desde la aplicación.", parent=self)
             return
-            
+
         try:
-            # Llama a la función del controlador para obtener el texto actualizado
-            texto_sincronizado = obtener_texto_desde_onedrive(self.file_id)
-            
-            # Formateamos el texto para que la aplicación lo reconozca
-            self.cuerpo_html = f"<p>{texto_sincronizado.replace(chr(10), '<br>')}</p>"
-            
-            self.lbl_estado_sync.configure(text="✓ Sincronizado correctamente desde OneDrive", text_color="green")
-            messagebox.showinfo("Sincronización exitosa", "¡Los cambios de Word Online se han sincronizado en la aplicación!", parent=self)
+            texto = obtener_texto_desde_onedrive(self.file_id)
         except Exception as e:
             messagebox.showerror("Error de sincronización", str(e), parent=self)
+            return
 
+        if not texto.strip():
+            messagebox.showwarning(
+                "Aviso",
+                "El documento en Word Online no tiene texto todavía.\n"
+                "Espera unos segundos a que se guarde y vuelve a sincronizar.",
+                parent=self)
+            return
+
+        # Se escapa el texto para que &, < o > no rompan el PDF (ReportLab).
+        self.cuerpo_html = "<p>" + html.escape(texto).replace("\n", "<br>") + "</p>"
+        print("SYNC (file_id):", self.file_id)
+        print("SYNC (texto):", repr(texto[:300]))
+
+        self.lbl_estado_sync.configure(text="✓ Sincronizado correctamente desde OneDrive", text_color="green")
+        messagebox.showinfo("Sincronización exitosa",
+                            "¡Los cambios de Word Online se sincronizaron en la aplicación!", parent=self)
+
+    # ------------------------------------------------------------------
+    # Utilidades
+    # ------------------------------------------------------------------
     def navigate(self, name):
         if name == 'Crear documento':
             self.asunto.focus_set()
@@ -214,8 +250,9 @@ class CrearDocumentoApp(Shell):
         self.asunto.delete(0, 'end')
         self.area_emisora.set('Selecciona un área')
         self.recepcion.delete(0, 'end')
-        self.cuerpo_html = "<p>Escribe aquí el contenido principal de tu oficio...</p>"
+        self.cuerpo_html = TEXTO_POR_DEFECTO
         self.file_id = None
+        self.web_url = None
         self.lbl_estado_editor.configure(text="Editor web listo para usar", text_color=MUTED)
         self.lbl_estado_sync.configure(text="Descarga los cambios hechos en Word Online", text_color=MUTED)
         self.estado.configure(text='')
@@ -225,11 +262,7 @@ class CrearDocumentoApp(Shell):
         asunto = self.asunto.get().strip()
         area = self.area_emisora.get().strip()
         recepcion = self.recepcion.get().strip()
-        
-        # Obtenemos el cuerpo directamente asegurando que no quede el texto por defecto
-        cuerpo = getattr(self, 'cuerpo_html', '').strip()
-        if not cuerpo or "Escribe aquí el contenido principal" in cuerpo:
-            cuerpo = "<p>Documento oficial emitido sin observaciones adicionales.</p>"
+        cuerpo = (self.cuerpo_html or '').strip()
 
         if not asunto:
             return self.advertir('Completa el campo Asunto.', self.asunto)
@@ -238,12 +271,28 @@ class CrearDocumentoApp(Shell):
         if not recepcion:
             return self.advertir('Completa el campo Recepción.', self.recepcion)
 
+        sin_contenido = (not cuerpo) or (MARCA_POR_DEFECTO in cuerpo) or cuerpo in ('<p></p>', '<p><br></p>')
+
+        # Si abrió Word Online pero no sincronizó, avisamos en vez de guardar el texto por defecto.
+        if sin_contenido and self.file_id:
+            messagebox.showwarning(
+                'Crear documento',
+                'Abriste Word Online pero todavía no has sincronizado los cambios.\n'
+                "Presiona 'Sincronizar Cambios' antes de guardar.",
+                parent=self)
+            return
+
+        if sin_contenido:
+            cuerpo = "<p>Documento oficial emitido sin observaciones adicionales.</p>"
+
+        print("GUARDAR (cuerpo):", repr(cuerpo[:300]))
+
         try:
             registro = guardar_documento(asunto, area, recepcion, cuerpo, folio=self.folio)
         except (OSError, ValueError) as error:
             messagebox.showerror('Guardar documento', str(error), parent=self)
             return
-        
+
         self.estado.configure(text=f"Documento {registro['folio']} guardado localmente.")
         messagebox.showinfo('Documento guardado',
                             f"Se registró {registro['folio']} correctamente.\n"

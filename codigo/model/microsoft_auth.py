@@ -5,7 +5,13 @@ import os
 from decouple import config
 CLIENT_ID = config('MICROSOFT_AUTH_API')
 AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES = ["https://graph.microsoft.com/Mail.Read"]
+# Todos los permisos se piden en el login para dar el consentimiento una sola vez:
+# correo (bandeja del home) y OneDrive/Word (crear documento).
+SCOPES = [
+    "https://graph.microsoft.com/Mail.Read",
+    "https://graph.microsoft.com/Files.ReadWrite",
+    "https://graph.microsoft.com/User.Read",
+]
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_FILE = os.path.join(BASE_DIR, "token_cache.bin")
@@ -42,5 +48,28 @@ def obtener_token_silencioso():
     if accounts:
         result = app.acquire_token_silent(SCOPES, account=accounts[0])
         if result and "access_token" in result:
+            _guardar_cache(app.token_cache)   # guarda el token renovado
             return result["access_token"]
     return None
+
+def obtener_token_graph():
+    """Token de Microsoft Graph usando la sesión del login.
+
+    Solo abre la ventana de Microsoft si no hay sesión válida, o si la sesión
+    guardada no incluye el permiso de OneDrive (pasa una vez, tras actualizar).
+    """
+    token = obtener_token_silencioso()
+    if token:
+        return token
+
+    app = obtener_cliente_msal()
+    cuentas = app.get_accounts()
+    hint = cuentas[0].get("username") if cuentas else None
+    result = app.acquire_token_interactive(scopes=SCOPES, login_hint=hint)
+    _guardar_cache(app.token_cache)
+    if "access_token" not in result:
+        raise RuntimeError(
+            "No se pudo autenticar con Microsoft 365: "
+            f"{result.get('error_description', 'error desconocido')}"
+        )
+    return result["access_token"]

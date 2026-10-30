@@ -270,7 +270,7 @@ def crear_documento():
     # El folio y el fondo se colocan en el encabezado para mantener el fondo
     # detrás del contenido de la página.
     parrafo_folio = encabezado.paragraphs[0]
-    parrafo_folio.paragraph_format.space_before = Inches(1.65)
+    parrafo_folio.paragraph_format.space_before = Inches(2.65)
     agregar_folio(parrafo_folio, folio)
 
     parrafo_imagen = encabezado.add_paragraph()
