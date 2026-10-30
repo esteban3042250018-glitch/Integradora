@@ -6,11 +6,17 @@ from PIL import Image
 import sys
 from pathlib import Path
 
+<<<<<<< HEAD
 VIEWS = Path(__file__).resolve().parent   # carpeta "views" (aquí vive ui_helpers.py)
 RAIZ = VIEWS.parent                        # carpeta "codigo"
 for ruta in (RAIZ, VIEWS):
     if str(ruta) not in sys.path:
         sys.path.insert(0, str(ruta))
+=======
+RAIZ = Path(__file__).resolve().parent.parent  # carpeta "codigo"
+if str(RAIZ) not in sys.path:
+    sys.path.insert(0, str(RAIZ))
+>>>>>>> 8343474b4b8d1b842960ee1c4d06b1e2e5cd2c67
 from ui_helpers import *
 import msal
 from model.microsoft_auth import iniciar_sesion_interactivo

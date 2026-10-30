@@ -4,8 +4,11 @@ from tkinter import messagebox
 import sys
 import os
 import json
+<<<<<<< HEAD
 import html
 import webbrowser
+=======
+>>>>>>> 8343474b4b8d1b842960ee1c4d06b1e2e5cd2c67
 from pathlib import Path
 import webview
 import customtkinter as ctk
@@ -161,6 +164,10 @@ class CrearDocumentoApp(Shell):
     # Editor web local
     # ------------------------------------------------------------------
     def abrir_editor_web(self):
+<<<<<<< HEAD
+=======
+    
+>>>>>>> 8343474b4b8d1b842960ee1c4d06b1e2e5cd2c67
         api = ApiWeb(self)
         RAIZ = Path(__file__).resolve().parent.parent   # carpeta "codigo"
         EDITOR = RAIZ / 'editor.html'
