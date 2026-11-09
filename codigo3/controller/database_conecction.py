@@ -1,7 +1,6 @@
 import psycopg
 from psycopg.rows import dict_row
 from .config import DB_config
-from pathlib import Path
 from datetime import date
 
 
@@ -33,22 +32,11 @@ class Database_connection:
         finally:
             conexion.close()
 
-    def registrar_ruta_documento(self, folio, ruta_archivo):
+    def registrar_pdf_generado(self, folio):
         conexion = self.get_connection()
         try:
             with conexion:
                 with conexion.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        INSERT INTO correspondencia.oficios_documentos
-                            (folio, ruta_archivo)
-                        VALUES (%s, %s)
-                        ON CONFLICT (folio) DO UPDATE
-                        SET ruta_archivo = EXCLUDED.ruta_archivo,
-                            fecha_actualizacion = CURRENT_TIMESTAMP
-                        """,
-                        (folio, str(Path(ruta_archivo).resolve())),
-                    )
                     cursor.execute(
                         """
                         UPDATE correspondencia.borradores
@@ -76,9 +64,70 @@ class Database_connection:
                     )
         except psycopg.Error as error:
             raise RuntimeError(
-                "No se pudo registrar la ruta del documento en PostgreSQL. "
-                "Verifica la conexión y que la base existente tenga las tablas "
-                "requeridas."
+                "No se pudo actualizar el estado del borrador ni crear la "
+                "notificación del PDF en PostgreSQL."
+            ) from error
+        finally:
+            conexion.close()
+
+    def reservar_folio(self, max_folio_local=0):
+        anio = date.today().year
+        expresion = rf'^IPN/CVDRD/([0-9]+)/{anio}$'
+        conexion = self.get_connection()
+        try:
+            with conexion:
+                with conexion.cursor() as cursor:
+                    cursor.execute(
+                        'SELECT pg_advisory_xact_lock(%s, %s)', (18673, anio))
+                    cursor.execute(
+                        """
+                        SELECT COALESCE(
+                            MAX((regexp_match(folio, %s))[1]::BIGINT), 0
+                        )
+                        FROM (
+                            SELECT folio FROM correspondencia.oficios_envio
+                            UNION ALL
+                            SELECT folio FROM correspondencia.oficios_recibido
+                            UNION ALL
+                            SELECT folio FROM correspondencia.borradores
+                        ) AS folios
+                        WHERE folio ~ %s
+                        """,
+                        (expresion, expresion),
+                    )
+                    maximo_existente = cursor.fetchone()[0]
+                    cursor.execute(
+                        """
+                        SELECT ultimo_numero
+                        FROM correspondencia.folios_anuales
+                        WHERE anio = %s
+                        FOR UPDATE
+                        """,
+                        (anio,),
+                    )
+                    fila = cursor.fetchone()
+                    ultimo = fila[0] if fila else 0
+                    siguiente = max(
+                        ultimo, maximo_existente, max_folio_local
+                    ) + 1
+                    cursor.execute(
+                        """
+                        INSERT INTO correspondencia.folios_anuales
+                            (anio, ultimo_numero)
+                        VALUES (%s, %s)
+                        ON CONFLICT (anio) DO UPDATE
+                        SET ultimo_numero = EXCLUDED.ultimo_numero
+                        """,
+                        (anio, siguiente),
+                    )
+                    return f'IPN/CVDRD/{siguiente:03d}/{anio}'
+        except psycopg.Error as error:
+            raise RuntimeError(
+                'No se pudo reservar el folio en PostgreSQL. Verifica que '
+                'todos los equipos usen la base compartida y que existan las '
+                'tablas correspondencia.folios_anuales, borradores, '
+                'oficios_envio y oficios_recibido. '
+                f'Detalle: {error}'
             ) from error
         finally:
             conexion.close()
@@ -103,7 +152,9 @@ class Database_connection:
                             MAX((regexp_match(folio, %s))[1]::BIGINT), 0
                         )
                         FROM (
-                            SELECT folio FROM correspondencia.oficios_documentos
+                            SELECT folio FROM correspondencia.oficios_envio
+                            UNION ALL
+                            SELECT folio FROM correspondencia.oficios_recibido
                             UNION ALL
                             SELECT folio FROM correspondencia.borradores
                         ) AS folios
@@ -344,27 +395,6 @@ class Database_connection:
             raise RuntimeError(
                 'No se pudieron marcar las notificaciones como leídas. '
                 f'Detalle: {error}'
-            ) from error
-        finally:
-            conexion.close()
-
-    def listar_rutas_documentos(self):
-        conexion = self.get_connection()
-        try:
-            with conexion.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    SELECT folio, ruta_archivo, fecha_registro
-                    FROM correspondencia.oficios_documentos
-                    ORDER BY fecha_registro DESC, folio
-                    """
-                )
-                return cursor.fetchall()
-        except psycopg.Error as error:
-            raise RuntimeError(
-                "No se pudieron consultar los documentos enviados en PostgreSQL. "
-                "Verifica la conexión y que la base existente tenga las tablas "
-                "requeridas."
             ) from error
         finally:
             conexion.close()

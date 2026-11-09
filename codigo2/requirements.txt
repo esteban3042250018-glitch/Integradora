@@ -6,5 +6,4 @@ python-decouple
 python-docx
 reportlab
 psycopg[binary]
-paramiko
 pyinstaller

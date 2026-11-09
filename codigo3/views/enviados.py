@@ -1,4 +1,4 @@
-"""Listado de PDF enviados y registrados en PostgreSQL."""
+"""Listado local de PDF generados."""
 import os
 from pathlib import Path
 import sys
@@ -10,7 +10,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
-from controller.database_conecction import Database_connection
+from model.document_store import listar_pdfs_locales
 from views.ui_helpers import ACCENT, BG, MUTED, TEXT, Shell, button, card, label
 
 
@@ -29,7 +29,7 @@ class EnviadosApp(Shell):
         label(texto, 'Documentos enviados', 28, TEXT, True).pack(anchor='w')
         label(
             texto,
-            'PDF registrados en PostgreSQL; abre cada archivo desde la ruta local guardada.',
+            'PDF guardados en este equipo.',
             13, MUTED,
         ).pack(anchor='w', pady=(4, 0))
         button(encabezado, '↻  Actualizar', self.cargar_documentos, width=130).pack(
@@ -52,8 +52,8 @@ class EnviadosApp(Shell):
             elemento.destroy()
 
         try:
-            documentos = Database_connection().listar_rutas_documentos()
-        except (ConnectionError, RuntimeError) as error:
+            documentos = listar_pdfs_locales()
+        except (OSError, ValueError) as error:
             label(
                 self.listado,
                 f'No se pudieron cargar los documentos: {error}',
@@ -63,7 +63,7 @@ class EnviadosApp(Shell):
 
         if not documentos:
             label(
-                self.listado, 'Todavía no hay documentos registrados en PostgreSQL.',
+                self.listado, 'Todavía no hay PDF guardados en este equipo.',
                 13, MUTED,
             ).pack(anchor='w', padx=22, pady=24)
             return

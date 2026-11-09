@@ -12,12 +12,3 @@ DB_config = {
     'dbname': config('POSTGRES_DB', default='postgres'),
     'port': config('POSTGRES_PORT', default=5432, cast=int),
 }
-
-SFTP_config = {
-    'host': config('SFTP_HOST', default=''),
-    'port': config('SFTP_PORT', default=22, cast=int),
-    'user': config('SFTP_USER', default=''),
-    'password': config('SFTP_PASSWORD', default=''),
-    'remote_dir': config('SFTP_REMOTE_DIR', default=''),
-    'host_key_fingerprint': config('SFTP_HOST_KEY_FINGERPRINT', default=''),
-}

@@ -54,6 +54,14 @@ def reservar_folio(conexion):
     with conexion.cursor() as cursor:
         cursor.execute(
             """
+            INSERT INTO personalizacion.configuracion_folios
+                (id_configuracion, siguiente_numero)
+            VALUES (1, 1)
+            ON CONFLICT (id_configuracion) DO NOTHING
+            """
+        )
+        cursor.execute(
+            """
             SELECT siguiente_numero
             FROM personalizacion.configuracion_folios
             WHERE id_configuracion = 1

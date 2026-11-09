@@ -8,7 +8,6 @@ datas = [
     (str(ROOT / "icon.png"), "."),
     (str(ROOT / "image.png"), "."),
     (str(ROOT / "views" / "assets" / "cvdr.jpg"), "views/assets"),
-    (str(ROOT / "database" / "crear_tabla_documentos.sql"), "database"),
 ]
 binaries = []
 hiddenimports = [
@@ -23,7 +22,7 @@ hiddenimports = [
 ]
 
 for package in ("customtkinter", "PIL", "msal", "requests",
-                "decouple", "docx", "reportlab", "psycopg", "paramiko"):
+                "decouple", "docx", "reportlab", "psycopg"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries

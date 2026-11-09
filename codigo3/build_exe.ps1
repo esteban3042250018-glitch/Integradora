@@ -12,10 +12,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $release = Join-Path $PSScriptRoot 'dist\GestionInstitucional'
-$legacySql = Join-Path $release 'database\crear_tabla_documentos.sql'
-if (Test-Path -LiteralPath $legacySql) {
-    Remove-Item -LiteralPath $legacySql -Force
-}
 $exampleEnv = Join-Path $PSScriptRoot '.env.example'
 $releaseEnv = Join-Path $release '.env'
 $sourceEnv = Join-Path $PSScriptRoot '.env'

@@ -1,6 +1,7 @@
 import psycopg
 from psycopg.rows import dict_row
 from .config import DB_config
+from datetime import date
 
 
 class Database_connection:
@@ -34,48 +35,64 @@ class Database_connection:
         finally:
             conexion.close()
 
-    def registrar_ruta_documento(self, folio, ruta_archivo):
+    def reservar_folio(self, max_folio_local=0):
+        anio = date.today().year
+        expresion = rf'^IPN/CVDRD/([0-9]+)/{anio}$'
         conexion = self.get_connection()
         try:
             with conexion:
                 with conexion.cursor() as cursor:
                     cursor.execute(
+                        'SELECT pg_advisory_xact_lock(%s, %s)', (18673, anio))
+                    cursor.execute(
                         """
-                        INSERT INTO correspondencia.oficios_documentos
-                            (folio, ruta_archivo)
-                        VALUES (%s, %s)
-                        ON CONFLICT (folio) DO UPDATE
-                        SET ruta_archivo = EXCLUDED.ruta_archivo,
-                            fecha_actualizacion = CURRENT_TIMESTAMP
+                        SELECT COALESCE(
+                            MAX((regexp_match(folio, %s))[1]::BIGINT), 0
+                        )
+                        FROM (
+                            SELECT folio FROM correspondencia.oficios_envio
+                            UNION ALL
+                            SELECT folio FROM correspondencia.oficios_recibido
+                            UNION ALL
+                            SELECT folio FROM correspondencia.borradores
+                        ) AS folios
+                        WHERE folio ~ %s
                         """,
-                        (folio, str(ruta_archivo)),
+                        (expresion, expresion),
                     )
+                    maximo_existente = cursor.fetchone()[0]
+                    cursor.execute(
+                        """
+                        SELECT ultimo_numero
+                        FROM correspondencia.folios_anuales
+                        WHERE anio = %s
+                        FOR UPDATE
+                        """,
+                        (anio,),
+                    )
+                    fila = cursor.fetchone()
+                    ultimo = fila[0] if fila else 0
+                    siguiente = max(
+                        ultimo, maximo_existente, max_folio_local
+                    ) + 1
+                    cursor.execute(
+                        """
+                        INSERT INTO correspondencia.folios_anuales
+                            (anio, ultimo_numero)
+                        VALUES (%s, %s)
+                        ON CONFLICT (anio) DO UPDATE
+                        SET ultimo_numero = EXCLUDED.ultimo_numero
+                        """,
+                        (anio, siguiente),
+                    )
+                    return f'IPN/CVDRD/{siguiente:03d}/{anio}'
         except psycopg.Error as error:
             raise RuntimeError(
-                "No se pudo registrar la ruta del documento en PostgreSQL. "
-                "Verifica la conexión y ejecuta "
-                "database/crear_tabla_documentos.sql. "
-                f"Detalle de PostgreSQL: {error}"
-            ) from error
-        finally:
-            conexion.close()
-
-    def listar_rutas_documentos(self):
-        conexion = self.get_connection()
-        try:
-            with conexion.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    SELECT folio, ruta_archivo, fecha_registro
-                    FROM correspondencia.oficios_documentos
-                    ORDER BY fecha_registro DESC, folio
-                    """
-                )
-                return cursor.fetchall()
-        except psycopg.Error as error:
-            raise RuntimeError(
-                "No se pudieron consultar los documentos enviados en PostgreSQL. "
-                "Verifica la conexión y ejecuta database/crear_tabla_documentos.sql."
+                'No se pudo reservar el folio en PostgreSQL. Verifica que '
+                'todos los equipos usen la base compartida y que existan las '
+                'tablas correspondencia.folios_anuales, borradores, '
+                'oficios_envio y oficios_recibido. '
+                f'Detalle: {error}'
             ) from error
         finally:
             conexion.close()

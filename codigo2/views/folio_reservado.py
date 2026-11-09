@@ -1,8 +1,5 @@
 """Segunda pantalla: visualización de folio reservado, antes del formulario."""
 import sys
-import threading
-from queue import Empty, Queue
-from pathlib import Path
 from tkinter import messagebox
 import customtkinter as ctk
 
@@ -13,17 +10,16 @@ from views.ui_helpers import (
     Shell, ACCENT, BG, WHITE, LINE, TEXT, MUTED, PINK, GREEN, SOFT,
     label, card, button, open_screen, font,
 )
-from model.document_store import obtener_documento, ruta_pdf_oficio
+from model.document_store import (
+    obtener_documento, registrar_pdf_local, ruta_pdf_oficio,
+)
 from controller.pdf_generator import generar_pdf_oficio
-from controller.database_conecction import Database_connection
-from controller.remote_storage import subir_pdf_al_servidor
 
 class PantallaFolio(Shell):
     def __init__(self, master, folio):
         super().__init__(master, 'Crear documento')
         self.title('Gestión Institucional — Folio reservado')
         self.folio = folio
-        self._resultado_subida_pdf = Queue()
         self.registro = obtener_documento(folio)
         if self.registro is None:
             messagebox.showerror('Folio', 'No se encontró el folio reservado.', parent=self)
@@ -109,97 +105,19 @@ class PantallaFolio(Shell):
             messagebox.showerror('Error al generar PDF', str(error), parent=self)
             return
 
-        self.btn_generar_pdf.configure(
-            state='disabled', text='Conectando con servidor SFTP...')
-        threading.Thread(
-            target=self._subir_y_registrar_pdf,
-            args=(destino,),
-            daemon=True,
-        ).start()
-        self.after(100, self._revisar_resultado_subida_pdf)
-
-    def _subir_y_registrar_pdf(self, destino):
         try:
-            ruta_remota = subir_pdf_al_servidor(
-                destino,
-                callback=lambda transferidos, total: self._resultado_subida_pdf.put(
-                    ('progress', transferidos, total)
-                ),
-            )
-        except Exception as error:
-            self._resultado_subida_pdf.put(('upload_error', error))
-            return
-
-        self._resultado_subida_pdf.put(('registering',))
-        try:
-            Database_connection().registrar_ruta_documento(
-                self.folio, ruta_remota)
-        except Exception as error:
-            self._resultado_subida_pdf.put(
-                ('database_error', error, ruta_remota))
-            return
-
-        self._resultado_subida_pdf.put(('success', ruta_remota))
-
-    def _revisar_resultado_subida_pdf(self):
-        if not self.winfo_exists():
-            return
-        while True:
-            try:
-                resultado = self._resultado_subida_pdf.get_nowait()
-            except Empty:
-                self.after(100, self._revisar_resultado_subida_pdf)
-                return
-
-            if resultado[0] == 'progress':
-                transferidos, total = resultado[1:]
-                porcentaje = int(transferidos * 100 / total) if total else 0
-                self.btn_generar_pdf.configure(
-                    text=f'Subiendo PDF a la VM... {porcentaje}%')
-            elif resultado[0] == 'registering':
-                self.btn_generar_pdf.configure(
-                    text='Registrando ruta en PostgreSQL...')
-            elif resultado[0] == 'upload_error':
-                self._mostrar_error_subida(resultado[1])
-                return
-            elif resultado[0] == 'database_error':
-                self._mostrar_error_registro(resultado[1], resultado[2])
-                return
-            else:
-                self._mostrar_exito(resultado[1])
-                return
-
-    def _restaurar_boton_pdf(self):
-        if self.winfo_exists():
-            self.btn_generar_pdf.configure(
-                state='normal', text='↓  Generar PDF del Oficio')
-
-    def _mostrar_error_subida(self, error):
-        self._restaurar_boton_pdf()
-        if self.winfo_exists():
+            registrar_pdf_local(self.folio, destino)
+        except (OSError, ValueError) as error:
             messagebox.showerror(
-                'Error al subir PDF a la VM',
-                f'El PDF local se generó, pero no se pudo subir al servidor.\n\n{error}',
+                'Historial local',
+                f'El PDF se generó, pero no se pudo actualizar el historial local.\n\n{error}',
                 parent=self,
             )
+            return
 
-    def _mostrar_error_registro(self, error, ruta_remota):
-        self._restaurar_boton_pdf()
-        if self.winfo_exists():
-            messagebox.showerror(
-                'Ruta no registrada',
-                'El PDF sí se subió a la VM, pero no se pudo guardar su ruta '
-                f'en PostgreSQL.\n\nRuta remota: {ruta_remota}\n\n{error}',
-                parent=self,
-            )
-
-    def _mostrar_exito(self, ruta_remota):
-        self._restaurar_boton_pdf()
-        if self.winfo_exists():
-            messagebox.showinfo(
-                'Generar PDF',
-                'El PDF se subió a la VM y su ruta quedó registrada en PostgreSQL:\n'
-                f'{ruta_remota}',
-                parent=self,
-            )
+        messagebox.showinfo(
+            'Generar PDF',
+            f'El PDF se guardó localmente:\n{destino}',
+            parent=self,
+        )
     

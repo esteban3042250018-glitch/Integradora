@@ -148,7 +148,7 @@ class AppGestiónInstitucional(Shell):
         """Reserva un folio nuevo y abre el flujo: folio reservado → crear documento → PDF."""
         try:
             folio = reservar_folio()
-        except (OSError, ValueError) as error:
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
             messagebox.showerror('Crear documento', str(error), parent=self)
             return
         open_screen(self, 'folio_reservado.py', folio)
@@ -233,4 +233,3 @@ class AppGestiónInstitucional(Shell):
 
     def record_detail(self, record):
         messagebox.showinfo(record[0], '\n'.join([record[2], 'Remitente: '+record[3], 'Área: '+record[4], 'Prioridad: '+record[5], 'Responsable: '+record[7], 'Estado: '+record[8], 'Fecha: '+record[9]]), parent=self)
-

@@ -39,6 +39,17 @@ def obtener_conexion():
     return conexion
 
 
+def _asegurar_configuracion_folios(cursor):
+    cursor.execute(
+        """
+        INSERT INTO personalizacion.configuracion_folios
+            (id_configuracion, siguiente_numero)
+        VALUES (1, 1)
+        ON CONFLICT (id_configuracion) DO NOTHING
+        """
+    )
+
+
 def validar_imagen(ruta):
     """Devuelve (ruta, MIME, bytes) después de validar la imagen."""
     texto_ruta = ruta.strip().strip('"').strip("'")
@@ -124,18 +135,14 @@ def reiniciar_folios():
             with conexion.cursor() as cursor:
                 cursor.execute(
                     """
-                    UPDATE personalizacion.configuracion_folios
+                    INSERT INTO personalizacion.configuracion_folios
+                        (id_configuracion, siguiente_numero)
+                    VALUES (1, 1)
+                    ON CONFLICT (id_configuracion) DO UPDATE
                     SET siguiente_numero = 1,
                         fecha_actualizacion = CURRENT_TIMESTAMP
-                    WHERE id_configuracion = 1
                     """
                 )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        "No existe el registro id_configuracion=1 en "
-                        "personalizacion.configuracion_folios. Ejecuta el SQL "
-                        "de inicialización en DBeaver."
-                    )
     finally:
         conexion.close()
 
@@ -165,6 +172,7 @@ def obtener_siguiente_folio():
     try:
         with conexion:
             with conexion.cursor() as cursor:
+                _asegurar_configuracion_folios(cursor)
                 cursor.execute(
                     """
                     SELECT siguiente_numero
@@ -208,6 +216,7 @@ def consultar_siguiente_folio():
     try:
         with conexion:
             with conexion.cursor() as cursor:
+                _asegurar_configuracion_folios(cursor)
                 cursor.execute(
                     """
                     SELECT siguiente_numero

@@ -82,25 +82,26 @@ def _bloqueo(ruta):
             pass
 
 
-def _nuevo_folio(registros, anio):
+def max_folio_local(anio, ruta=None):
     regex = re.compile(rf'IPN/CVDRD/(\d+)/{anio}\Z')
     numeros = []
-    for registro in registros:
+    for registro in leer_documentos(ruta):
         identificador = str(registro.get('folio') or registro.get('id', ''))
         coincidencia = regex.fullmatch(identificador)
         if coincidencia:
             numeros.append(int(coincidencia.group(1)))
-    siguiente = max(numeros, default=0) + 1
-    return f'IPN/CVDRD/{siguiente:03d}/{anio}'
+    return max(numeros, default=0)
 
 
-def reservar_folio(ruta=None):
+def registrar_folio_local(folio, ruta=None):
     ruta = Path(ruta) if ruta is not None else ruta_documentos()
     with _bloqueo(ruta):
         registros = leer_documentos(ruta)
+        for registro in registros:
+            if registro.get('folio') == folio or registro.get('id') == folio:
+                return registro.copy()
         ahora = datetime.now()
-        folio = _nuevo_folio(registros, ahora.year)
-        registros.append({
+        registro = {
             'id': folio,
             'folio': folio,
             'estado': 'Reservado',
@@ -109,8 +110,19 @@ def reservar_folio(ruta=None):
             'recepcion': '',
             'cuerpo': '',
             'reservado_el': ahora.isoformat(timespec='seconds'),
-        })
+        }
+        registros.append(registro)
         _escribir_documentos(ruta, registros)
+        return registro.copy()
+
+
+def reservar_folio(ruta=None):
+    anio = datetime.now().year
+    maximo_local = max_folio_local(anio, ruta)
+    from controller.database_conecction import Database_connection
+
+    folio = Database_connection().reservar_folio(maximo_local)
+    registrar_folio_local(folio, ruta)
     return folio
 
 
@@ -119,6 +131,41 @@ def obtener_documento(folio, ruta=None):
         if registro.get('folio') == folio or registro.get('id') == folio:
             return registro.copy()
     return None
+
+
+def registrar_pdf_local(folio, ruta_pdf, ruta=None):
+    ruta = Path(ruta) if ruta is not None else ruta_documentos()
+    ruta_pdf = Path(ruta_pdf).expanduser().resolve()
+    with _bloqueo(ruta):
+        registros = leer_documentos(ruta)
+        for registro in registros:
+            if registro.get('folio') != folio and registro.get('id') != folio:
+                continue
+            registro['ruta_pdf'] = str(ruta_pdf)
+            registro['pdf_generado_el'] = datetime.now().isoformat(
+                timespec='seconds')
+            _escribir_documentos(ruta, registros)
+            return registro.copy()
+    raise ValueError(f'No se encontró el documento asociado al folio {folio}.')
+
+
+def listar_pdfs_locales(ruta=None):
+    documentos = []
+    for registro in leer_documentos(ruta):
+        ruta_pdf = registro.get('ruta_pdf')
+        folio = registro.get('folio') or registro.get('id')
+        if not ruta_pdf or not folio:
+            continue
+        documentos.append({
+            'folio': str(folio),
+            'ruta_archivo': str(ruta_pdf),
+            'fecha_registro': registro.get('pdf_generado_el', ''),
+        })
+    return sorted(
+        documentos,
+        key=lambda documento: documento['fecha_registro'],
+        reverse=True,
+    )
 
 
 def guardar_documento(asunto, area_emisora, recepcion, cuerpo, ruta=None, *, folio=None):
@@ -133,12 +180,10 @@ def guardar_documento(asunto, area_emisora, recepcion, cuerpo, ruta=None, *, fol
             raise ValueError('Completa el campo: ' + nombre.replace('_', ' ').capitalize())
 
     ruta = Path(ruta) if ruta is not None else ruta_documentos()
+    if folio is None:
+        folio = reservar_folio(ruta)
     with _bloqueo(ruta):
         registros = leer_documentos(ruta)
-        if folio is None:
-            folio = _nuevo_folio(registros, datetime.now().year)
-            registros.append({'id': folio, 'folio': folio, 'estado': 'Reservado',
-                              'reservado_el': datetime.now().isoformat(timespec='seconds')})
         for registro in registros:
             if registro.get('folio') != folio:
                 continue

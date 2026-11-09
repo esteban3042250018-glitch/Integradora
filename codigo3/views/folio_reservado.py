@@ -11,7 +11,9 @@ from views.ui_helpers import (
     Shell, ACCENT, BG, WHITE, LINE, TEXT, MUTED, PINK, GREEN, SOFT,
     label, card, button, open_screen, font,
 )
-from model.document_store import obtener_documento, ruta_pdf_oficio
+from model.document_store import (
+    obtener_documento, registrar_pdf_local, ruta_pdf_oficio,
+)
 from controller.pdf_generator import generar_pdf_oficio
 from controller.database_conecction import Database_connection
 
@@ -106,19 +108,31 @@ class PantallaFolio(Shell):
             return
 
         try:
-            Database_connection().registrar_ruta_documento(self.folio, destino)
-        except Exception as error:
+            registrar_pdf_local(self.folio, destino)
+        except (OSError, ValueError) as error:
             messagebox.showerror(
-                'Ruta no registrada',
-                f'El PDF se generó, pero no se pudo guardar su ruta en PostgreSQL.\n\n'
+                'Historial local',
+                f'El PDF se generó, pero no se pudo actualizar el historial local.\n\n'
                 f'Archivo: {destino}\n\n{error}',
+                parent=self,
+            )
+            return
+
+        try:
+            Database_connection().registrar_pdf_generado(self.folio)
+        except (ConnectionError, RuntimeError) as error:
+            messagebox.showwarning(
+                'PDF guardado localmente',
+                f'El PDF y su ruta quedaron guardados en este equipo:\n{destino}\n\n'
+                'No se pudo actualizar el estado del borrador ni crear el aviso '
+                f'en PostgreSQL:\n{error}',
                 parent=self,
             )
             return
 
         messagebox.showinfo(
             'Generar PDF',
-            f'El oficio se guardó localmente y su ruta quedó registrada en PostgreSQL:\n{destino}',
+            f'El oficio y su ruta quedaron guardados en este equipo:\n{destino}',
             parent=self,
         )
     
