@@ -1,0 +1,9 @@
+customtkinter
+Pillow
+msal
+requests
+python-decouple
+python-docx
+reportlab
+psycopg[binary]
+pyinstaller
