@@ -1,6 +1,0 @@
-.env
-token_cache.bin
-__pycache__/
-build/
-dist/
-*.spec.bak
