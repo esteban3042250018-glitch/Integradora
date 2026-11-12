@@ -1,5 +1,6 @@
 """Segunda pantalla: visualización de folio reservado, antes del formulario."""
 import sys
+from pathlib import Path
 from tkinter import messagebox
 import customtkinter as ctk
 
@@ -10,13 +11,15 @@ from views.ui_helpers import (
     Shell, ACCENT, BG, WHITE, LINE, TEXT, MUTED, PINK, GREEN, SOFT,
     label, card, button, open_screen, font,
 )
-from model.document_store import obtener_documento, reservar_folio, ruta_pdf_oficio
+from model.document_store import (
+    obtener_documento, registrar_pdf_local, ruta_pdf_oficio,
+)
 from controller.pdf_generator import generar_pdf_oficio
-from controller.database_conecction import Database_connection
+from controller.database_connection import Database_connection
 
 class PantallaFolio(Shell):
-    def __init__(self, folio):
-        super().__init__('Crear documento')
+    def __init__(self, master, folio):
+        super().__init__(master, 'Crear documento')
         self.title('Gestión Institucional — Folio reservado')
         self.folio = folio
         self.registro = obtener_documento(folio)
@@ -41,7 +44,6 @@ class PantallaFolio(Shell):
         folio_caja.pack(fill='x', padx=85)
         label(folio_caja, folio, 24, ACCENT, True).pack(pady=22, padx=18)
         label(interior, 'Conserva este número para identificar tu documento.', 12, MUTED).pack(pady=(14, 28))
-        estado = self.registro.get('estado', 'Creado' if str(folio).startswith('DOC-') else 'Reservado')
         self.btn_crear = button(interior, '▤  Crear documento', self.crear, primary=True,
                                 height=62, fg_color=GREEN, hover_color='#18764F', font=font(19, True))
         self.btn_crear.pack(fill='x', padx=86, pady=(0, 14))
@@ -49,12 +51,29 @@ class PantallaFolio(Shell):
             interior, '↓  Generar PDF del Oficio', self.generar_pdf, height=58,
             text_color=ACCENT, border_color=ACCENT, font=font(17, True))
         self.btn_generar_pdf.pack(fill='x', padx=86)
-        if estado == 'Creado':
-            label(interior, 'Documento guardado. Puedes generar su PDF o volver al inicio.',
-                  12, GREEN, True).pack(pady=(16, 0))
+        self.estado_folio = label(interior, '', 12, GREEN, True)
+        self.estado_folio.pack(pady=(16, 0))
+        self._actualizar_estado()
+
+    def on_show(self):
+        self._actualizar_estado()
+
+    def _actualizar_estado(self):
+        self.registro = obtener_documento(self.folio)
+        if self.registro is None:
+            return
+        if self.registro.get('estado') == 'Creado':
+            self.estado_folio.configure(
+                text='Documento guardado. Puedes generar su PDF o volver al inicio.',
+                text_color=GREEN,
+            )
             self.btn_crear.configure(text='✓  Documento creado', state='disabled')
         else:
-            label(interior, 'Primero completa Asunto, Área emisora, Recepción y Cuerpo.', 11, MUTED).pack(pady=(16, 0))
+            self.estado_folio.configure(
+                text='Primero completa Asunto, Área emisora, Recepción y Cuerpo.',
+                text_color=MUTED,
+            )
+            self.btn_crear.configure(text='▤  Crear documento', state='normal')
 
     def navigate(self, name):
         if name == 'Crear documento':
@@ -89,28 +108,31 @@ class PantallaFolio(Shell):
             return
 
         try:
-            Database_connection().registrar_ruta_documento(self.folio, destino)
-        except Exception as error:
+            registrar_pdf_local(self.folio, destino)
+        except (OSError, ValueError) as error:
             messagebox.showerror(
-                'Ruta no registrada',
-                f'El PDF se generó, pero no se pudo guardar su ruta en PostgreSQL.\n\n'
+                'Historial local',
+                f'El PDF se generó, pero no se pudo actualizar el historial local.\n\n'
                 f'Archivo: {destino}\n\n{error}',
+                parent=self,
+            )
+            return
+
+        try:
+            Database_connection().registrar_pdf_generado(self.folio)
+        except (ConnectionError, RuntimeError) as error:
+            messagebox.showwarning(
+                'PDF guardado localmente',
+                f'El PDF y su ruta quedaron guardados en este equipo:\n{destino}\n\n'
+                'No se pudo actualizar el estado del borrador ni crear el aviso '
+                f'en PostgreSQL:\n{error}',
                 parent=self,
             )
             return
 
         messagebox.showinfo(
             'Generar PDF',
-            f'El oficio se guardó localmente y su ruta quedó registrada en PostgreSQL:\n{destino}',
+            f'El oficio y su ruta quedaron guardados en este equipo:\n{destino}',
             parent=self,
         )
     
-
-
-def main():
-    folio = sys.argv[1] if len(sys.argv) > 1 else reservar_folio()
-    PantallaFolio(folio).mainloop()
-
-
-if __name__ == '__main__':
-    main()

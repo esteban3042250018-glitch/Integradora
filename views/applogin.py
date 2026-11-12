@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 from tkinter import messagebox
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageDraw
 import sys
 from pathlib import Path
 
@@ -13,24 +13,12 @@ for ruta in (RAIZ, VIEWS):
         sys.path.insert(0, str(ruta))
 from views.ui_helpers import *
 from controller.app_paths import resource_path
-import msal
 from model.microsoft_auth import iniciar_sesion_interactivo
-import requests
-from decouple import AutoConfig
-from controller.app_paths import application_dir
 
-# Configuración de MSAL para Microsoft Entra ID
-CLIENT_ID = AutoConfig(search_path=str(application_dir()))('MICROSOFT_AUTH_API')
-AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES = ["https://graph.microsoft.com/Mail.Read"]
-
-msal_app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
-
-class LoginApp(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        window_setup(self, '01 — Acceso | Gestión Institucional')
-        self.minsize(1440, 900)
+class LoginApp(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color=BG, corner_radius=0)
+        self.winfo_toplevel().title('01 — Acceso | Gestión Institucional')
         self.grid_columnconfigure(0, weight=41, uniform='panels')
         self.grid_columnconfigure(1, weight=59, uniform='panels')
         self.grid_rowconfigure(0, weight=1)
@@ -53,8 +41,17 @@ class LoginApp(ctk.CTk):
         
         try:
             with Image.open(resource_path('views', 'assets', 'cvdr.jpg')) as source:
-                original = source.convert('RGB')
-            self.logo_image = ctk.CTkImage(light_image=original, size=(184, 138))
+                original = source.convert('RGBA')
+            width, height = original.size
+            side = max(width, height)
+            canvas = Image.new('RGBA', (side, side), (255, 255, 255, 255))
+            canvas.paste(original, ((side - width) // 2, (side - height) // 2))
+            canvas = canvas.resize((184, 184), Image.Resampling.LANCZOS)
+            mask = Image.new('L', (184, 184), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, 183, 183), fill=255)
+            canvas.putalpha(mask)
+            self.logo_image = ctk.CTkImage(
+                light_image=canvas, dark_image=canvas, size=(184, 184))
             ctk.CTkLabel(circle, text='', image=self.logo_image).place(relx=.5, rely=.5, anchor='center')
         except OSError:
             label(circle, '[ Logo Institucional ]', 14, ACCENT, True).place(relx=.5, rely=.5, anchor='center')
@@ -110,8 +107,36 @@ class LoginApp(ctk.CTk):
             try:
                 result = iniciar_sesion_interactivo()
                 if "access_token" in result:
-                    nombre = result.get("id_token_claims", {}).get("name", "Usuario")
-                    self.after(0, lambda: self.abrir_home(nombre))
+                    claims = result.get("id_token_claims") or {}
+                    nombre = claims.get("name", "Usuario")
+                    tenant_id = claims.get("tid")
+                    object_id = claims.get("oid")
+                    usuario_id = (
+                        f'{tenant_id}:{object_id}'
+                        if tenant_id and object_id
+                        else claims.get("preferred_username")
+                        or claims.get("email")
+                        or claims.get("sub")
+                    )
+                    usuario_id = str(usuario_id).strip().casefold() if usuario_id else ''
+                    usuario_email = (
+                        claims.get('preferred_username')
+                        or claims.get('upn')
+                        or claims.get('email')
+                    )
+                    if usuario_id:
+                        self.after(
+                            0,
+                            lambda: self.abrir_home(
+                                nombre, usuario_id, usuario_email),
+                        )
+                    else:
+                        self.after(0, lambda: messagebox.showerror(
+                            "Identidad de Microsoft",
+                            "Microsoft no devolvió un identificador de cuenta. "
+                            "No se puede asociar el borrador al empleado.",
+                            parent=self,
+                        ))
                 else:
                     error = result.get("error_description", "Error desconocido")
                     self.after(0, lambda: messagebox.showerror("Error", error, parent=self))
@@ -121,10 +146,9 @@ class LoginApp(ctk.CTk):
         import threading
         threading.Thread(target=background_task, daemon=True).start()
 
-    def abrir_home(self, nombre_usuario):
-        
-        open_screen(self, 'home.py', extra_args=[nombre_usuario]) # O el nombre de tu archivo home
+    def abrir_home(self, nombre_usuario, usuario_id, usuario_email=None):
 
-
-if __name__ == '__main__':
-    LoginApp().mainloop()
+        open_screen(
+            self, 'home.py',
+            extra_args=[nombre_usuario, usuario_id, usuario_email or ''],
+        )

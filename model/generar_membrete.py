@@ -1,6 +1,8 @@
 from io import BytesIO
 from pathlib import Path
+import re
 import sys
+from datetime import date
 
 from docx import Document
 from docx.shared import Inches, Pt
@@ -14,7 +16,8 @@ CARPETA_CODIGO = Path(__file__).resolve().parents[1]
 if str(CARPETA_CODIGO) not in sys.path:
     sys.path.insert(0, str(CARPETA_CODIGO))
 
-from controller.database_conecction import Database_connection
+from controller.database_connection import Database_connection, database_cursor
+from model.folio_format import read_configuration, reserve_next_folio
 
 
 CARPETA_CODIGO = Path(__file__).resolve().parents[1]
@@ -23,13 +26,11 @@ CARPETA_OFICIOS = CARPETA_CODIGO / "oficios"
 ANCHO_PAGINA = 8.5
 ALTO_PAGINA = 11.0
 
-PREFIJO_FOLIO = "CVDR-DGO-"
-DIGITOS_FOLIO = 4
-
 MARGEN_SUPERIOR = 0.85
 MARGEN_INFERIOR = 0.85
 MARGEN_IZQUIERDO = 0.85
 MARGEN_DERECHO = 0.85
+DESPLAZAMIENTO_FOLIO = 3.0
 
 
 def obtener_conexion():
@@ -43,77 +44,20 @@ def obtener_conexion():
 
 
 def reservar_folio(conexion):
-    """
-    Reserva un folio único para la generación del documento.
-
-    Bloquea la fila única de configuracion_folios, avanza el contador y
-    comprueba ambas tablas de oficios para tolerar reinicios del contador.
-    El contador se confirma antes de generar el DOCX: si la generación falla,
-    puede quedar un número sin usar, pero nunca se reutiliza por accidente.
-    """
-    with conexion.cursor() as cursor:
+    """Reserva el próximo folio usando la configuración compartida."""
+    with database_cursor(conexion) as cursor:
         cursor.execute(
-            """
-            SELECT siguiente_numero
-            FROM personalizacion.configuracion_folios
-            WHERE id_configuracion = 1
-            FOR UPDATE
-            """
+            'SELECT pg_advisory_xact_lock(%s, %s)',
+            (18673, date.today().year),
         )
-        fila = cursor.fetchone()
-
-        if fila is None:
-            raise RuntimeError(
-                "No existe la configuración de folios. "
-                "Inserta la fila id_configuracion = 1 en "
-                "personalizacion.configuracion_folios."
-            )
-
-        numero = fila[0]
-
-        while True:
-            folio = f"{PREFIJO_FOLIO}{numero:0{DIGITOS_FOLIO}d}"
-
-            cursor.execute(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM correspondencia.oficios_envio
-                    WHERE folio = %s
-                )
-                OR EXISTS (
-                    SELECT 1
-                    FROM correspondencia.oficios_recibido
-                    WHERE folio = %s
-                )
-                """,
-                (folio, folio),
-            )
-            ya_existe = cursor.fetchone()[0]
-
-            if not ya_existe:
-                break
-
-            numero += 1
-
-        cursor.execute(
-            """
-            UPDATE personalizacion.configuracion_folios
-            SET siguiente_numero = %s,
-                fecha_actualizacion = CURRENT_TIMESTAMP
-            WHERE id_configuracion = 1
-            """,
-            (numero + 1,),
-        )
-
-    # Confirma el avance y libera el bloqueo de la fila de configuración.
+        folio = reserve_next_folio(cursor)
     conexion.commit()
     return folio
 
 
 def obtener_imagen_membrete(conexion):
     """Devuelve los bytes de la única imagen activa del membrete."""
-    with conexion.cursor() as cursor:
+    with database_cursor(conexion) as cursor:
         cursor.execute(
             """
             SELECT nombre_archivo, tipo_mime, imagen
@@ -216,19 +160,23 @@ def agregar_imagen_fondo(parrafo, imagen_bytes, ancho, alto):
     inline.getparent().replace(inline, ancla)
 
 
-def agregar_folio(parrafo, folio):
+def agregar_folio(parrafo, folio, configuracion=None):
     parrafo.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     formato = parrafo.paragraph_format
-    formato.space_before = Inches(2.65)
+    formato.space_before = Inches(DESPLAZAMIENTO_FOLIO)
     formato.space_after = Inches(0)
-    formato.left_indent = Inches(0.65)
+    formato.left_indent = Inches(0)
     formato.right_indent = Inches(0)
     formato.line_spacing = 1
 
     texto = parrafo.add_run(f"FOLIO: {folio}")
-    texto.font.name = "Arial"
-    texto.font.size = Pt(10)
+    texto.font.name = (
+        configuracion['fuente'] if configuracion else 'Arial'
+    )
+    texto.font.size = Pt(
+        configuracion['tamano'] if configuracion else 10
+    )
     texto.bold = True
 
 
@@ -247,6 +195,8 @@ def crear_documento():
         # La conexión se cierra en finally aunque ocurra un error.
         folio = reservar_folio(conexion)
         nombre_imagen, tipo_mime, imagen_bytes = obtener_imagen_membrete(conexion)
+        with database_cursor(conexion) as cursor:
+            configuracion = read_configuration(cursor)
     finally:
         conexion.close()
 
@@ -270,8 +220,7 @@ def crear_documento():
     # El folio y el fondo se colocan en el encabezado para mantener el fondo
     # detrás del contenido de la página.
     parrafo_folio = encabezado.paragraphs[0]
-    parrafo_folio.paragraph_format.space_before = Inches(2.65)
-    agregar_folio(parrafo_folio, folio)
+    agregar_folio(parrafo_folio, folio, configuracion)
 
     parrafo_imagen = encabezado.add_paragraph()
     agregar_imagen_fondo(
@@ -288,10 +237,8 @@ def crear_documento():
     # Crear la carpeta de destino si todavía no existe.
     CARPETA_OFICIOS.mkdir(parents=True, exist_ok=True)
 
-    # El nombre del archivo usa el número del folio reservado:
-    # CVDR-DGO-0001 -> Folio1.docx; CVDR-DGO-0012 -> Folio12.docx.
-    numero_folio = int(folio.removeprefix(PREFIJO_FOLIO))
-    ruta_salida = CARPETA_OFICIOS / f"Folio{numero_folio}.docx"
+    nombre_seguro = re.sub(r'[\\/:*?"<>|]', '_', str(folio))
+    ruta_salida = CARPETA_OFICIOS / f"Oficio_{nombre_seguro}.docx"
     documento.save(ruta_salida)
     print(f"Documento creado: {ruta_salida}")
     print(f"Folio reservado: {folio}")

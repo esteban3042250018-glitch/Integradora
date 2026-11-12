@@ -10,10 +10,13 @@ AUTHORITY = "https://login.microsoftonline.com/common"
 # Todos los permisos se piden en el login para dar el consentimiento una sola vez:
 # correo (bandeja del home) y OneDrive/Word (crear documento).
 SCOPES = [
-    "https://graph.microsoft.com/Mail.Read",
+    "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Files.ReadWrite",
     "https://graph.microsoft.com/User.Read",
 ]
+if AutoConfig(search_path=str(application_dir()))('CVDR_MAILBOX_EMAIL', default='').strip():
+    SCOPES.append('https://graph.microsoft.com/Mail.ReadWrite.Shared')
+
 AUTH_SUCCESS_TEMPLATE = """<!doctype html>
 <html lang="es">
 <head>
@@ -71,9 +74,15 @@ def iniciar_sesion_interactivo():
     _guardar_cache(app.token_cache)
     return result
 
-def obtener_token_silencioso():
+def obtener_token_silencioso(usuario_email=None):
     app = obtener_cliente_msal()
     accounts = app.get_accounts()
+    if usuario_email:
+        usuario_normalizado = usuario_email.strip().casefold()
+        accounts = [
+            account for account in accounts
+            if str(account.get('username') or '').casefold() == usuario_normalizado
+        ]
     if accounts:
         result = app.acquire_token_silent(SCOPES, account=accounts[0])
         if result and "access_token" in result:
@@ -81,28 +90,42 @@ def obtener_token_silencioso():
             return result["access_token"]
     return None
 
-def obtener_token_graph():
+def obtener_token_graph(usuario_email=None):
     """Token de Microsoft Graph usando la sesión del login.
 
     Solo abre la ventana de Microsoft si no hay sesión válida, o si la sesión
     guardada no incluye el permiso de OneDrive (pasa una vez, tras actualizar).
     """
-    token = obtener_token_silencioso()
+    usuario_email = str(usuario_email or '').strip()
+    if not usuario_email:
+        raise RuntimeError(
+            "No se pudo identificar la cuenta autenticada para acceder a Microsoft Graph."
+        )
+
+    token = obtener_token_silencioso(usuario_email)
     if token:
         return token
 
     app = obtener_cliente_msal()
-    cuentas = app.get_accounts()
-    hint = cuentas[0].get("username") if cuentas else None
     result = app.acquire_token_interactive(
         scopes=SCOPES,
-        login_hint=hint,
+        login_hint=usuario_email,
         success_template=AUTH_SUCCESS_TEMPLATE,
     )
-    _guardar_cache(app.token_cache)
     if "access_token" not in result:
         raise RuntimeError(
             "No se pudo autenticar con Microsoft 365: "
             f"{result.get('error_description', 'error desconocido')}"
         )
+    claims = result.get("id_token_claims") or {}
+    identidades = {
+        str(claims.get(clave) or '').strip().casefold()
+        for clave in ('preferred_username', 'upn', 'email')
+    }
+    if usuario_email.casefold() not in identidades:
+        raise RuntimeError(
+            "La cuenta seleccionada en Microsoft no coincide con la cuenta "
+            "que inició sesión en la aplicación."
+        )
+    _guardar_cache(app.token_cache)
     return result["access_token"]

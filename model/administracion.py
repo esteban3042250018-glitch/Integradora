@@ -1,5 +1,6 @@
-from pathlib import Path
+import json
 import mimetypes
+from pathlib import Path
 import sys
 
 try:
@@ -13,18 +14,16 @@ CARPETA_CODIGO = Path(__file__).resolve().parent.parent
 if str(CARPETA_CODIGO) not in sys.path:
     sys.path.insert(0, str(CARPETA_CODIGO))
 
-try:
-    from controller.database_conecction import Database_connection
-except ImportError as error:
-    raise ImportError(
-        "No se pudo importar Database_connection. Verifica que este archivo "
-        "esté en codigo/controller/database_conecction.py o ajusta el nombre "
-        "del módulo al nombre real del archivo."
-    ) from error
+from controller.database_connection import Database_connection, database_cursor
 
+from model.folio_format import (
+    build_configuration,
+    configuration_from_row,
+    preview_next_folio,
+    read_configuration,
+    reserve_next_folio,
+)
 
-PREFIJO_FOLIO = "CVDR-DGO-"
-DIGITOS_FOLIO = 4
 FORMATOS_IMAGEN = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
 
 
@@ -83,7 +82,7 @@ def cambiar_imagen_membrete(ruta):
 
     try:
         with conexion:
-            with conexion.cursor() as cursor:
+            with database_cursor(conexion) as cursor:
                 # Desactivar el membrete vigente, sin borrar registros.
                 cursor.execute("""
                     UPDATE personalizacion.membrete
@@ -116,86 +115,77 @@ def cambiar_imagen_membrete(ruta):
     finally:
         conexion.close()
 
-def reiniciar_folios():
-    """Reinicia el contador sin borrar ni modificar oficios."""
+
+def obtener_membrete_activo():
+    """Devuelve los datos del único membrete activo, sin exponer más filas."""
     conexion = obtener_conexion()
     try:
-        with conexion:
-            with conexion.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE personalizacion.configuracion_folios
-                    SET siguiente_numero = 1,
-                        fecha_actualizacion = CURRENT_TIMESTAMP
-                    WHERE id_configuracion = 1
-                    """
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError(
-                        "No existe el registro id_configuracion=1 en "
-                        "personalizacion.configuracion_folios. Ejecuta el SQL "
-                        "de inicialización en DBeaver."
-                    )
+        with database_cursor(conexion) as cursor:
+            cursor.execute(
+                """
+                SELECT id_membrete, nombre_archivo, tipo_mime, imagen,
+                       fecha_actualizacion
+                FROM personalizacion.membrete
+                WHERE estatus = TRUE
+                ORDER BY fecha_actualizacion DESC, id_membrete DESC
+                LIMIT 2
+                """
+            )
+            filas = cursor.fetchall()
     finally:
         conexion.close()
 
-    return "Contador reiniciado a 1. No se borró ni modificó ningún oficio."
-
-
-def _folio_esta_ocupado(cursor, folio):
-    cursor.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM correspondencia.oficios_envio WHERE folio = %s
-            UNION ALL
-            SELECT 1 FROM correspondencia.oficios_recibido WHERE folio = %s
+    if not filas:
+        raise RuntimeError(
+            "No hay un membrete activo en personalizacion.membrete."
         )
-        """,
-        (folio, folio),
-    )
-    return cursor.fetchone()[0]
+    if len(filas) > 1:
+        raise RuntimeError(
+            "Hay más de un membrete activo en personalizacion.membrete."
+        )
+
+    id_membrete, nombre, tipo_mime, imagen, actualizado = filas[0]
+    if not imagen:
+        raise RuntimeError(
+            f"El membrete activo ({nombre}) no contiene datos de imagen."
+        )
+    return id_membrete, nombre, tipo_mime, bytes(imagen), actualizado
 
 
-def obtener_siguiente_folio():
-    """
-    Reserva un folio y avanza el contador en una transacción.
-    Omite folios que ya existan en enviados o recibidos.
-    """
+def reiniciar_folios():
+    """Registra el reinicio del contador y conserva su historial."""
     conexion = obtener_conexion()
     try:
         with conexion:
-            with conexion.cursor() as cursor:
+            with database_cursor(conexion) as cursor:
+                cursor.execute(
+                    'LOCK TABLE personalizacion.configuracion_folios '
+                    'IN SHARE ROW EXCLUSIVE MODE'
+                )
                 cursor.execute(
                     """
-                    SELECT siguiente_numero
-                    FROM personalizacion.configuracion_folios
-                    WHERE id_configuracion = 1
-                    FOR UPDATE
+                    INSERT INTO personalizacion.configuracion_folios
+                        (siguiente_numero)
+                    VALUES (1)
                     """
                 )
-                fila = cursor.fetchone()
-                if fila is None:
-                    raise RuntimeError(
-                        "No existe el registro del contador en "
-                        "personalizacion.configuracion_folios."
-                    )
+    finally:
+        conexion.close()
 
-                numero = fila[0]
-                while True:
-                    folio = f"{PREFIJO_FOLIO}{numero:0{DIGITOS_FOLIO}d}"
-                    numero += 1
-                    if not _folio_esta_ocupado(cursor, folio):
-                        break
+    return (
+        "Se registró el reinicio del contador a 1. El historial y los "
+        "documentos existentes se conservaron; la reserva omitirá folios "
+        "duplicados."
+    )
 
-                cursor.execute(
-                    """
-                    UPDATE personalizacion.configuracion_folios
-                    SET siguiente_numero = %s,
-                        fecha_actualizacion = CURRENT_TIMESTAMP
-                    WHERE id_configuracion = 1
-                    """,
-                    (numero,),
-                )
+
+def obtener_siguiente_folio():
+    """Reserva y devuelve el siguiente folio usando el formato configurado."""
+    conexion = obtener_conexion()
+    try:
+        with conexion:
+            with database_cursor(conexion) as cursor:
+                folio = reserve_next_folio(cursor)
     finally:
         conexion.close()
 
@@ -203,34 +193,100 @@ def obtener_siguiente_folio():
 
 
 def consultar_siguiente_folio():
-    """Consulta el siguiente folio libre sin reservarlo."""
+    """Consulta el siguiente folio libre sin avanzar el contador."""
     conexion = obtener_conexion()
     try:
-        with conexion:
-            with conexion.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT siguiente_numero
-                    FROM personalizacion.configuracion_folios
-                    WHERE id_configuracion = 1
-                    """
-                )
-                fila = cursor.fetchone()
-                if fila is None:
-                    raise RuntimeError(
-                        "No existe el registro del contador en "
-                        "personalizacion.configuracion_folios."
-                    )
-
-                numero = fila[0]
-                while True:
-                    folio = f"{PREFIJO_FOLIO}{numero:0{DIGITOS_FOLIO}d}"
-                    if not _folio_esta_ocupado(cursor, folio):
-                        return folio
-                    numero += 1
+        with database_cursor(conexion) as cursor:
+            return preview_next_folio(cursor)
     finally:
         conexion.close()
 
+
+def obtener_configuracion_folio():
+    conexion = obtener_conexion()
+    try:
+        with database_cursor(conexion) as cursor:
+            return read_configuration(cursor)
+    finally:
+        conexion.close()
+
+
+def obtener_configuraciones_folio():
+    conexion = obtener_conexion()
+    try:
+        with database_cursor(conexion) as cursor:
+            cursor.execute(
+                """
+                SELECT segmentos, digitos, fuente_membrete,
+                       tamano_membrete, anio_folio
+                FROM personalizacion.configuracion_formato_folio
+                ORDER BY id_configuracion DESC
+                """
+            )
+            filas = cursor.fetchall()
+        if not filas:
+            raise RuntimeError(
+                'No existe el formato de folio en personalizacion. '
+                'Ejecuta database\\personalizacion.sql.'
+            )
+        return [configuration_from_row(fila) for fila in filas]
+    finally:
+        conexion.close()
+
+
+def guardar_configuracion_folio(template, digits, font, font_size, year=None):
+    configuration = build_configuration(
+        template, digits, font, font_size, year)
+    conexion = obtener_conexion()
+    try:
+        with conexion:
+            with database_cursor(conexion) as cursor:
+                cursor.execute(
+                    'LOCK TABLE personalizacion.configuracion_formato_folio '
+                    'IN SHARE ROW EXCLUSIVE MODE'
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO personalizacion.configuracion_formato_folio
+                        (segmentos, digitos, fuente_membrete, tamano_membrete,
+                         anio_folio, fecha_actualizacion)
+                    VALUES (%s::jsonb, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    RETURNING id_configuracion
+                    """,
+                    (
+                        json.dumps(
+                            configuration['segmentos'], ensure_ascii=False),
+                        configuration['digitos'],
+                        configuration['fuente'],
+                        configuration['tamano'],
+                        configuration['anio_folio'],
+                    ),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        'PostgreSQL no confirmó el guardado del formato de folio.'
+                    )
+                return int(row[0])
+    finally:
+        conexion.close()
+
+
+def desactivar_membrete():
+    conexion = obtener_conexion()
+    try:
+        with conexion:
+            with database_cursor(conexion) as cursor:
+                cursor.execute(
+                    """
+                    UPDATE personalizacion.membrete
+                    SET estatus = FALSE
+                    WHERE estatus IS TRUE
+                    """
+                )
+                return cursor.rowcount
+    finally:
+        conexion.close()
 
 def menu():
     while True:
