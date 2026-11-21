@@ -326,11 +326,9 @@ class AppGestiónInstitucional(Shell):
 
     @staticmethod
     def matching(records, query='', state='Estado', priority='Prioridad', category='all'):
-        terms = query.casefold().split()
-        return [r for r in records if all(term in ' '.join(r).casefold() for term in terms)
-            and (state == 'Estado' or r[8] == state) and (priority == 'Prioridad' or r[5] == priority)
-            and (category == 'all' or r[8] == category or (category == 'seguimiento' and r[8] in ('En atención', 'Turnada'))
-                 or (category == 'enviada' and r[1] == 'ENVIADA'))]
+        """Apply the shared, unit-tested correspondence filters."""
+        from model.search_filters import matching_records
+        return matching_records(records, query, state, priority, category)
 
     def filter_rows(self, event=None):
         query = self.search_entry.get() + ' ' + self.filter_entry.get()
