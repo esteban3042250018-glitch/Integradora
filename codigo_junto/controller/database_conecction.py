@@ -32,6 +32,26 @@ class Database_connection:
         finally:
             conexion.close()
 
+    def buscar_correspondencia(
+        self, folio=None, asunto=None, fecha_desde=None, fecha_hasta=None,
+        departamento=None,
+    ):
+        """Search sent and received correspondence with optional filters.
+
+        The query builder keeps all user-supplied values parameterized. Empty
+        criteria are ignored and date boundaries are inclusive.
+        """
+        from controller.correspondence_search import build_search_query
+
+        query, params = build_search_query(
+            folio=folio,
+            asunto=asunto,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            departamento=departamento,
+        )
+        return self.ejecutar_consulta(query, params)
+
     def registrar_pdf_generado(self, folio):
         conexion = self.get_connection()
         try:
