@@ -1,0 +1,707 @@
+"""Administración del membrete institucional y los folios."""
+from datetime import date
+from io import BytesIO
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+from PIL import Image
+
+from model.areas_usuarios import usuario_puede_administrar
+from views.ui_helpers import usuario_actual_email
+
+from model.administracion import (
+    cambiar_imagen_membrete,
+    consultar_siguiente_folio,
+    desactivar_membrete,
+    guardar_configuracion_folio,
+    obtener_configuracion_folio,
+    obtener_membrete_activo,
+    reiniciar_folios,
+)
+from model.folio_format import (
+    DEFAULT_DIGITS,
+    DEFAULT_FONT,
+    DEFAULT_FONT_SIZE,
+    DEFAULT_TEMPLATE,
+    build_configuration,
+    build_configuration_from_editor_segments,
+    render_folio,
+    template_from_editor_segments,
+    available_system_fonts,
+)
+from views.ui_helpers import (
+    ACCENT,
+    BG,
+    MUTED,
+    TEXT,
+    WHITE,
+    Shell,
+    button,
+    card,
+    entry,
+    font,
+    label,
+)
+
+
+FONT_OPTIONS = available_system_fonts()
+
+
+class DashboardApp(Shell):
+    def __init__(self, master):
+        if not usuario_puede_administrar(usuario_actual_email()):
+            raise PermissionError('Acceso restringido. Solo Dirección Administrativa puede acceder a la administración.')
+        super().__init__(master, 'Configuración')
+        self._imagen_preview = None
+        self.active_section = 'membrete'
+        content = ctk.CTkFrame(self.body, fg_color='transparent')
+        content.pack(fill='both', expand=True, padx=30, pady=24)
+        heading = ctk.CTkFrame(content, fg_color='transparent')
+        heading.pack(fill='x', pady=(0, 18))
+        titles = ctk.CTkFrame(heading, fg_color='transparent')
+        titles.pack(side='left')
+        label(titles, 'Administración institucional', 30, TEXT, True).pack(
+            anchor='w')
+        label(
+            titles,
+            'Gestiona la identidad visual y el formato de los folios.',
+            15,
+            MUTED,
+        ).pack(anchor='w', pady=(4, 0))
+
+        self.folio_segments = [
+            {'tipo': 'texto', 'valor': 'IPN/CVDRD/'},
+            {'tipo': 'numero', 'valor': ''},
+            {'tipo': 'texto', 'valor': '/'},
+            {'tipo': 'anio', 'valor': ''},
+        ]
+        self.admin_nav = ctk.CTkFrame(
+            content, fg_color=WHITE, corner_radius=12,
+            border_width=1, border_color='#E5E7EB', height=66)
+        self.admin_nav.pack(fill='x', pady=(0, 18))
+        self.admin_nav.pack_propagate(False)
+        self.admin_buttons = {}
+        for key, title in (
+            ('membrete', 'Admin 1  ·  Imagen institucional'),
+            ('folios', 'Admin 2  ·  Estructura de folio'),
+        ):
+            control = button(
+                self.admin_nav, title,
+                command=lambda section=key: self.mostrar_seccion(section),
+                width=285 if key == 'membrete' else 280,
+                height=46, border_width=0,
+                fg_color='#FCE7F3' if key == self.active_section else WHITE,
+                text_color=ACCENT if key == self.active_section else TEXT,
+                hover_color='#FCE7F3',
+                font=font(14, key == self.active_section),
+            )
+            control.pack(side='left', padx=(10, 4), pady=9)
+            self.admin_buttons[key] = control
+        self.admin_content = ctk.CTkFrame(
+            content, fg_color='transparent')
+        self.admin_content.pack(fill='both', expand=True)
+        self.mostrar_seccion(self.active_section)
+
+    def mostrar_seccion(self, section):
+        self.active_section = section
+        for key, control in self.admin_buttons.items():
+            selected = key == section
+            control.configure(
+                fg_color='#FCE7F3' if selected else WHITE,
+                text_color=ACCENT if selected else TEXT,
+                font=font(14, selected),
+            )
+        for child in self.admin_content.winfo_children():
+            child.destroy()
+        if section == 'folios':
+            self._crear_panel_folio(self.admin_content)
+            self.cargar_configuracion()
+        else:
+            self._crear_panel_membrete(self.admin_content)
+            self.cargar_membrete()
+
+    def _crear_panel_folio(self, parent):
+        panel = card(parent)
+        panel.pack(fill='both', expand=True, pady=(0, 18))
+        label(panel, 'Estructura y consecutivo de folio', 22, TEXT, True).pack(
+            anchor='w', padx=28, pady=(26, 6))
+        label(
+            panel,
+            'Edita el contenido de los cuadros de Texto. Número y Año son '
+            'marcadores automáticos. Usa las flechas para reordenar los cuadros.',
+            14,
+            MUTED,
+        ).pack(anchor='w', padx=28, pady=(0, 20))
+
+        grid = ctk.CTkFrame(panel, fg_color='transparent')
+        grid.pack(fill='x', padx=28)
+        grid.grid_columnconfigure(0, weight=3)
+        grid.grid_columnconfigure((1, 2, 3), weight=1)
+
+        grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform='folio-fields')
+        self.digits_entry = self._form_field(
+            grid, 'Dígitos del consecutivo', row=0, column=0,
+            placeholder=str(DEFAULT_DIGITS))
+        self.digits_entry.bind(
+            '<KeyRelease>', lambda _event: self.actualizar_vista_previa())
+
+        font_field = ctk.CTkFrame(grid, fg_color='transparent')
+        font_field.grid(row=0, column=1, sticky='ew', padx=(8, 8))
+        label(font_field, 'Fuente', 11, TEXT, True).pack(anchor='w', pady=(0, 4))
+        self.font_selector = ctk.CTkComboBox(
+            font_field,
+            values=FONT_OPTIONS,
+            height=40,
+            state='readonly',
+            corner_radius=8,
+            fg_color=WHITE,
+            border_color='#DEDCE2',
+            text_color=TEXT,
+            font=font(12),
+            command=lambda _value: self.actualizar_vista_previa(),
+        )
+        self.font_selector.pack(fill='x')
+        self.font_selector.set(DEFAULT_FONT)
+
+        self.size_entry = self._form_field(
+            grid, 'Tamaño de fuente (pt)', row=0, column=2,
+            placeholder=str(DEFAULT_FONT_SIZE))
+        self.size_entry.bind(
+            '<KeyRelease>', lambda _event: self.actualizar_vista_previa())
+        self.year_entry = self._form_field(
+            grid, 'Año (vacío = año actual)', row=1, column=0,
+            placeholder='Automático')
+        self.year_entry.bind(
+            '<KeyRelease>', lambda _event: self.actualizar_vista_previa())
+
+        self.format_preview = label(
+            grid, f'Vista previa: {DEFAULT_TEMPLATE.replace("{numero}", "001").replace("{ano}", str(date.today().year))}',
+            12, ACCENT, True)
+        self.format_preview.grid(
+            row=1, column=1, columnspan=3, sticky='w', padx=(12, 0))
+
+        segments_heading = ctk.CTkFrame(panel, fg_color='transparent')
+        segments_heading.pack(fill='x', padx=22, pady=(18, 8))
+        label(segments_heading, 'Estructura del folio', 16, TEXT, True).pack(
+            side='left')
+        button(
+            segments_heading,
+            '+ Cuadro de texto',
+            lambda: self.agregar_segmento('texto'),
+            width=164,
+            height=40,
+        ).pack(side='right', padx=(8, 0))
+        button(
+            segments_heading,
+            '+ Número',
+            lambda: self.agregar_segmento('numero'),
+            width=132,
+            height=40,
+        ).pack(side='right', padx=(8, 0))
+        button(
+            segments_heading,
+            '+ Año',
+            lambda: self.agregar_segmento('anio'),
+            width=110,
+            height=40,
+        ).pack(side='right')
+        self.segments_frame = ctk.CTkFrame(panel, fg_color='transparent')
+        self.segments_frame.pack(fill='x', padx=28)
+        self.render_segments()
+
+        actions = ctk.CTkFrame(panel, fg_color='transparent')
+        actions.pack(fill='x', padx=28, pady=(24, 28))
+        button(
+            actions,
+            'Guardar formato',
+            self.guardar_formato,
+            primary=True,
+            width=160,
+        ).pack(side='left')
+        button(
+            actions,
+            'Consultar siguiente folio',
+            self.actualizar_siguiente,
+            width=205,
+        ).pack(side='left', padx=(10, 0))
+        button(
+            actions,
+            'Reiniciar consecutivo',
+            self.confirmar_reinicio,
+            width=185,
+        ).pack(side='left', padx=(10, 0))
+        self.next_folio_label = label(
+            actions, 'Siguiente folio: —', 15, ACCENT, True)
+        self.next_folio_label.pack(side='right', padx=(12, 0))
+
+    def _form_field(self, parent, title, *, row, column, placeholder):
+        field = ctk.CTkFrame(parent, fg_color='transparent')
+        field.grid(row=row, column=column, sticky='ew', padx=(0, 8))
+        label(field, title, 11, TEXT, True).pack(anchor='w', pady=(0, 4))
+        control = entry(field, placeholder)
+        control.pack(fill='x')
+        return control
+
+    def render_segments(self):
+        """Dibuja los cuadros usando la identidad del segmento, no su índice."""
+        for child in self.segments_frame.winfo_children():
+            child.destroy()
+
+        for index, segment in enumerate(self.folio_segments):
+            tile = card(self.segments_frame, width=220, height=142)
+            tile.grid(
+                row=index // 4,
+                column=index % 4,
+                sticky='nsew',
+                padx=(0, 10),
+                pady=(0, 10),
+            )
+            tile.grid_propagate(False)
+            tile.grid_columnconfigure(0, weight=1)
+            header = ctk.CTkFrame(tile, fg_color='transparent')
+            header.grid(row=0, column=0, sticky='ew', padx=14, pady=(12, 6))
+            label(header, f'Cuadro {index + 1}', 13, TEXT, True).pack(side='left')
+            button(
+                header,
+                '×',
+                lambda item=segment: self.eliminar_segmento(item),
+                width=32,
+                height=30,
+                border_width=0,
+                text_color=MUTED,
+            ).pack(side='right')
+            move_up = button(
+                header,
+                '↑',
+                lambda item=segment: self.mover_segmento(item, -1),
+                width=28,
+                height=30,
+                border_width=0,
+                text_color=MUTED,
+            )
+            move_up.pack(side='right')
+            if index == 0:
+                move_up.configure(state='disabled')
+            move_down = button(
+                header,
+                '↓',
+                lambda item=segment: self.mover_segmento(item, 1),
+                width=28,
+                height=30,
+                border_width=0,
+                text_color=MUTED,
+            )
+            move_down.pack(side='right')
+            if index == len(self.folio_segments) - 1:
+                move_down.configure(state='disabled')
+
+            selector = ctk.CTkComboBox(
+                tile,
+                values=['Texto', 'Número', 'Año'],
+                height=38,
+                corner_radius=7,
+                fg_color=WHITE,
+                border_color='#DEDCE2',
+                text_color=TEXT,
+                font=font(11),
+                command=lambda value, item=segment:
+                    self.cambiar_tipo_segmento(item, value),
+            )
+            selector.grid(row=1, column=0, sticky='ew', padx=14, pady=(0, 6))
+            selector.set({
+                'texto': 'Texto',
+                'numero': 'Número',
+                'anio': 'Año',
+            }[segment['tipo']])
+
+            # Únicamente los segmentos de tipo Texto tienen un campo editable.
+            # Número y Año son marcadores automáticos: debajo de su selector
+            # no se crea ningún widget ni queda un área donde pueda escribirse.
+            if segment['tipo'] == 'texto':
+                value_entry = entry(
+                    tile,
+                    'Contenido del cuadro',
+                    height=38,
+                )
+                value_entry.grid(
+                    row=2, column=0, sticky='ew', padx=14, pady=(0, 12))
+                value_entry.insert(0, str(segment.get('valor', '')))
+                value_entry.bind(
+                    '<KeyRelease>',
+                    lambda _event, item=segment, control=value_entry:
+                        self.actualizar_texto_segmento(
+                            item, control.get(), control),
+                )
+
+        for column in range(4):
+            self.segments_frame.grid_columnconfigure(column, weight=1)
+        self.actualizar_vista_previa()
+
+    def agregar_segmento(self, kind):
+        if kind == 'numero' and any(
+            segment['tipo'] == 'numero' for segment in self.folio_segments
+        ):
+            messagebox.showwarning(
+                'Estructura del folio',
+                'Solo se permite un cuadro numérico.',
+                parent=self,
+            )
+            return
+        if kind == 'anio' and any(
+            segment['tipo'] == 'anio' for segment in self.folio_segments
+        ):
+            messagebox.showwarning(
+                'Estructura del folio',
+                'Solo se permite un cuadro de año.',
+                parent=self,
+            )
+            return
+        nuevo = {
+            'tipo': kind,
+            'valor': 'TEXTO' if kind == 'texto' else '',
+        }
+        if kind in {'numero', 'anio'}:
+            nuevo['separador'] = False
+        self.folio_segments.append(nuevo)
+        self.render_segments()
+
+    def cambiar_tipo_segmento(self, segment, value):
+        """Cambia el tipo del cuadro sin perder la referencia al reordenarlo."""
+        if not any(item is segment for item in self.folio_segments):
+            return
+        kind = {'Texto': 'texto', 'Número': 'numero', 'Año': 'anio'}.get(value)
+        if kind is None:
+            self.render_segments()
+            return
+        if kind in {'numero', 'anio'} and any(
+            item['tipo'] == kind and item is not segment
+            for item in self.folio_segments
+        ):
+            messagebox.showwarning(
+                'Estructura del folio',
+                'Solo se permite un cuadro numérico y un cuadro de año.',
+                parent=self,
+            )
+            self.render_segments()
+            return
+
+        tipo_anterior = segment.get('tipo')
+        valor_anterior = segment.get('valor', '')
+        segment.clear()
+        segment['tipo'] = kind
+        if kind == 'texto':
+            segment['valor'] = (
+                valor_anterior if tipo_anterior == 'texto' else 'TEXTO'
+            )
+        else:
+            segment['valor'] = ''
+            segment['separador'] = False
+        self.render_segments()
+
+    def actualizar_texto_segmento(self, segment, value, control=None):
+        """Actualiza únicamente el contenido del cuadro de texto."""
+        if not any(item is segment for item in self.folio_segments):
+            return
+        segment['valor'] = value
+        self.actualizar_vista_previa()
+
+    def mover_segmento(self, segment, direction):
+        index = next(
+            (position for position, item in enumerate(self.folio_segments)
+             if item is segment),
+            None,
+        )
+        if index is None:
+            return
+        destination = index + direction
+        if not 0 <= destination < len(self.folio_segments):
+            return
+        self.folio_segments[index], self.folio_segments[destination] = (
+            self.folio_segments[destination],
+            self.folio_segments[index],
+        )
+        self.render_segments()
+
+    def eliminar_segmento(self, segment):
+        index = next(
+            (position for position, item in enumerate(self.folio_segments)
+             if item is segment),
+            None,
+        )
+        if index is None:
+            return
+        self.folio_segments.pop(index)
+        self.render_segments()
+
+    def _segmentos_editor_desde_configuracion(self, configuration):
+        """Carga parámetros sin conservar guiones de versiones anteriores."""
+        resultado = []
+        for original in configuration.get('segmentos', []):
+            if not isinstance(original, dict):
+                continue
+            kind = str(original.get('tipo', '')).strip().lower()
+            value = str(original.get('valor', '')).strip('-')
+            resultado.append({
+                'tipo': kind,
+                'valor': value if kind == 'texto' else '',
+            })
+        return resultado
+
+    def obtener_segmentos_editor(self):
+        """Devuelve cada cuadro por separado, sin aplanar textos consecutivos."""
+        return [
+            {
+                'tipo': segment.get('tipo'),
+                'valor': str(segment.get('valor', '')).strip('-')
+                if segment.get('tipo') == 'texto' else '',
+            }
+            for segment in self.folio_segments
+        ]
+
+    def obtener_plantilla(self):
+        """Compatibilidad: devuelve una plantilla textual cuando se requiere."""
+        return template_from_editor_segments(self.obtener_segmentos_editor())
+
+    def actualizar_vista_previa(self):
+        try:
+            configuration = build_configuration_from_editor_segments(
+                self.obtener_segmentos_editor(),
+                self.digits_entry.get() or DEFAULT_DIGITS,
+                self.font_selector.get() or DEFAULT_FONT,
+                self.size_entry.get() or DEFAULT_FONT_SIZE,
+                self.year_entry.get(),
+            )
+            preview = render_folio(1, configuration)
+            self.format_preview.configure(text=f'Vista previa: {preview}')
+        except ValueError:
+            self.format_preview.configure(
+                text='Vista previa: completa los cuadros del folio')
+
+    def _crear_panel_membrete(self, parent):
+        panel = card(parent)
+        panel.pack(fill='both', expand=True)
+        label(panel, 'Identidad institucional · Membrete', 22, TEXT, True).pack(
+            anchor='w', padx=28, pady=(26, 6))
+        label(
+            panel,
+            'El membrete activo se utilizará en los próximos documentos.',
+            14, MUTED,
+        ).pack(anchor='w', padx=28, pady=(0, 20))
+        body = ctk.CTkFrame(panel, fg_color='transparent')
+        body.pack(fill='both', expand=True, padx=28, pady=(0, 28))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+
+        self.preview = ctk.CTkLabel(
+            body, text='Cargando membrete…', fg_color=BG,
+            corner_radius=12, height=300, text_color=MUTED,
+            font=font(15),
+        )
+        self.preview.grid(row=0, column=0, rowspan=4, sticky='nsew',
+                          padx=(0, 24))
+        details = ctk.CTkFrame(body, fg_color='transparent')
+        details.grid(row=0, column=1, sticky='new', pady=(10, 0))
+        label(details, 'Membrete actual', 16, TEXT, True).pack(anchor='w')
+        self.details = label(details, 'Consultando el membrete activo…', 14, MUTED)
+        self.details.pack(anchor='w', pady=(8, 12))
+        self.status = label(details, '', 13, MUTED, wraplength=480,
+                            justify='left', anchor='w')
+        self.status.pack(anchor='w', pady=(0, 20))
+
+        actions = ctk.CTkFrame(body, fg_color='transparent')
+        actions.grid(row=1, column=1, sticky='w')
+        button(
+            actions, '↑  Seleccionar nuevo membrete',
+            self.seleccionar_membrete, primary=True,
+            width=270, height=46,
+        ).pack(anchor='w', pady=(0, 12))
+        
+
+    def on_show(self):
+        if self.active_section == 'folios':
+            self.cargar_configuracion()
+        else:
+            self.cargar_membrete()
+
+    def cargar_configuracion(self):
+        try:
+            configuration = obtener_configuracion_folio()
+            self.folio_segments = self._segmentos_editor_desde_configuracion(
+                configuration)
+            self.render_segments()
+            self.digits_entry.delete(0, 'end')
+            self.digits_entry.insert(0, str(configuration['digitos']))
+            fuentes = list(self.font_selector.cget('values'))
+            if configuration['fuente'] not in fuentes:
+                fuentes.append(configuration['fuente'])
+                self.font_selector.configure(values=sorted(fuentes, key=str.casefold))
+            self.font_selector.set(configuration['fuente'])
+            self.size_entry.delete(0, 'end')
+            self.size_entry.insert(0, str(configuration['tamano']))
+            self.year_entry.delete(0, 'end')
+            if configuration['anio_folio'] is not None:
+                self.year_entry.insert(0, str(configuration['anio_folio']))
+            self.actualizar_siguiente()
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                'Configuración de folios',
+                f'No se pudo cargar la configuración de folios.\n{error}',
+                parent=self,
+            )
+
+    def guardar_formato(self):
+        try:
+            guardar_configuracion_folio(
+                self.obtener_plantilla(),
+                self.digits_entry.get(),
+                self.font_selector.get(),
+                self.size_entry.get(),
+                self.year_entry.get(),
+                segments=self.obtener_segmentos_editor(),
+            )
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                'Guardar formato',
+                f'No se pudo guardar el formato de folio.\n{error}',
+                parent=self,
+            )
+            return
+
+        self.actualizar_siguiente()
+        messagebox.showinfo(
+            'Guardar formato',
+            'El formato quedó guardado. Los oficios ya generados no se '
+            'modificaron.',
+            parent=self,
+        )
+
+    def actualizar_siguiente(self):
+        try:
+            folio = consultar_siguiente_folio()
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            self.next_folio_label.configure(
+                text='No disponible', text_color=ACCENT)
+            messagebox.showerror(
+                'Consultar folio',
+                f'No se pudo consultar el siguiente folio.\n{error}',
+                parent=self,
+            )
+            return
+        self.next_folio_label.configure(
+            text=f'Siguiente folio: {folio}', text_color=ACCENT)
+
+    def confirmar_reinicio(self):
+        if not messagebox.askyesno(
+            'Reiniciar consecutivo',
+            'Se registrará un nuevo contador desde 1. No se borrarán '
+            'oficios ni el historial; la aplicación omitirá folios que ya '
+            'existan para evitar duplicados.\n\n¿Continuar?',
+            parent=self,
+        ):
+            return
+        try:
+            reiniciar_folios()
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                'Reiniciar consecutivo',
+                f'No se pudo reiniciar el contador.\n{error}',
+                parent=self,
+            )
+            return
+        self.actualizar_siguiente()
+        messagebox.showinfo(
+            'Reiniciar consecutivo',
+            'Se registró el reinicio. Los folios existentes se conservaron.',
+            parent=self,
+        )
+
+    def cargar_membrete(self):
+        try:
+            id_membrete, nombre, tipo_mime, contenido, actualizado = (
+                obtener_membrete_activo()
+            )
+            with Image.open(BytesIO(contenido)) as image:
+                preview = image.convert('RGBA')
+            preview.thumbnail((1100, 420))
+            self._imagen_preview = ctk.CTkImage(
+                light_image=preview,
+                dark_image=preview,
+                size=preview.size,
+            )
+            self.preview.configure(image=self._imagen_preview, text='')
+            self.details.configure(
+                text=f'{nombre} · {tipo_mime} · ID {id_membrete}'
+            )
+            fecha = (
+                actualizado.strftime('%d/%m/%Y %H:%M')
+                if actualizado else 'No disponible'
+            )
+            self.status.configure(text=f'Última actualización: {fecha}')
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            self._imagen_preview = None
+            self.preview.configure(
+                image=None, text='No hay un membrete activo.')
+            self.details.configure(text='')
+            self.status.configure(text=str(error))
+
+    def seleccionar_membrete(self):
+        ruta = filedialog.askopenfilename(
+            parent=self,
+            title='Seleccionar membrete institucional',
+            filetypes=[
+                ('Imágenes', '*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp'),
+                ('Todos los archivos', '*.*'),
+            ],
+        )
+        if not ruta:
+            return
+
+        if not messagebox.askyesno(
+            'Cambiar membrete',
+            'El nuevo membrete se usará en los próximos documentos. '
+            'El anterior se conservará como inactivo.\n\n¿Continuar?',
+            parent=self,
+        ):
+            return
+
+        try:
+            cambiar_imagen_membrete(ruta)
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                'Cambiar membrete',
+                f'No se pudo actualizar el membrete.\n{error}',
+                parent=self,
+            )
+            return
+
+        self.cargar_membrete()
+        messagebox.showinfo(
+            'Cambiar membrete',
+            'El membrete se actualizó correctamente y se aplicará a los '
+            'próximos documentos.',
+            parent=self,
+        )
+
+    def confirmar_desactivacion(self):
+        if not messagebox.askyesno(
+            'Desactivar membrete',
+            'Sin un membrete activo no se podrán generar nuevos documentos. '
+            '¿Deseas desactivarlo?',
+            parent=self,
+        ):
+            return
+        try:
+            desactivados = desactivar_membrete()
+        except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror(
+                'Desactivar membrete',
+                f'No se pudo desactivar el membrete.\n{error}',
+                parent=self,
+            )
+            return
+        self.cargar_membrete()
+        messagebox.showinfo(
+            'Desactivar membrete',
+            f'Membretes desactivados: {desactivados}.',
+            parent=self,
+        )
