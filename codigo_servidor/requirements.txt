@@ -1,0 +1,11 @@
+customtkinter
+tkinterdnd2>=0.7.0
+Pillow
+msal
+requests
+python-decouple
+python-docx
+reportlab
+pg8000
+paramiko
+pyinstaller
