@@ -1,0 +1,5 @@
+Barrido heuristico de configuracion y fuente - A15
+Fecha local de ejecucion: 27/11/2026
+Alcance: archivos .py, .ini, .cfg, .toml, .json, .yaml, .yml, .env, .md y .txt del paquete fuente revisado; patrones de asignacion de password/passwd/secret/client_secret/access_token/refresh_token/api_key, cadenas Bearer largas y bloques de llave privada.
+Resultado: 0 coincidencias candidatas despues de excluir ejemplos/placeholders/configuracion via entorno; 0 archivos .env activos.
+Limitacion: el escaneo es heuristico y no equivale a una auditoria de seguridad exhaustiva ni garantiza ausencia absoluta de secretos. El archivo .env.example contiene nombres/valores de ejemplo y no credenciales activas.
