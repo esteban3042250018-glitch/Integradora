@@ -1,0 +1,5 @@
+--- original/views/applogin.py
++++ corregido/views/applogin.py
+@@
+-def _autenticar(cancel_event):
++def _autenticar(cancel_event=None):
